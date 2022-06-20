@@ -18,6 +18,7 @@ from typing import Dict, Tuple, List
 import numpy as np
 import re
 import h5py
+from torch.nn.utils.rnn import pad_sequence
 
 import utils
 from ConvNet import ConvNet
@@ -57,9 +58,37 @@ def get_dataloader(embed_path: str, labels_path: str,
     dataset = EmbedDataset(embed_path=embed_path,
                            labels_path=labels_path,
                            device=device)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    loader = DataLoader(dataset, batch_size=batch_size, 
+                        shuffle=True, collate_fn=custom_collate)
     return loader
 
+def logits_to_preds(logits):
+  """
+  @param logits: a tensor of size (seqlen, 3) containing logits of ss preds
+  @returns: a list of predictions eg. [2, 1, 1, 2, 2, 2, 0] 
+  => dssp3 class_mapping = {0:"H",1:"E",2:"L"} 
+  """
+  return torch.max(logits, dim=1 )[1].detach().cpu().numpy().squeeze()
+
+def label_to_id(labels: str):
+  """
+  'HHEELLL' -> [0, 0, 1, 1, 2, 2, 2]
+  """
+  class_mapping = {"H":0, "E":1, "L":2, "C":2} 
+  converted = [class_mapping[c] for c in labels]
+  return converted
+
+def custom_collate(data):
+  # https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
+
+  # data is a list of batch size containing 2-tuple containing embedding and label seq
+
+  inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
+  inputs = pad_sequence(inputs, batch_first=True) # pad embeddings to longest batch
+  
+  labels = [d[1] for d in data] # TODO: convert seq to (seqlen, 3) 
+
+  return inputs, labels
 
 def main_training_loop(model, train_data, device):
     bs = 4
@@ -88,21 +117,22 @@ def train(model: torch.nn.Module,
     total_loss = 0
 
     for i, batch in enumerate(train_data):
+        batch_loss = 0
         emb, label = batch
-
         optimizer.zero_grad()
-        # output of model, then compute_loss(out, label)
-        # convert label to ids => what is output of model?
-
         out = model(emb)
 
-        # convert label to machine readable.
-        print("label: ", label)
+        # print("out: ", out) # out.shape: torch.Size(bs, max_batch_seq_len, 3)
+        # calculate loss for each sequence in the batch
+        for batch_idx, e in enumerate(out): ## Geht das nicht auch schneller?
+          # 'e' are 3 class logits of a sequence
 
-        assert out.size() == label.size()  ## (batchsize, length_of_longest_seq, 3)
+          seqlen = len(label[batch_idx])
+          preds = logits_to_preds(e[:seqlen]) # already in form: [0, 1, 2, 3]
+          true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
 
-        # loss =
-
+          # calculate loss for a sequece
+          ## TODO: find loss function for loss([0, 1, 1, 3], [1, 1, 1, 3])
 
 def validate():
     pass
@@ -131,7 +161,7 @@ if __name__ == "__main__":
     test_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/new_pisces.jsonl_embeddings.h5"
     test_labels_path = "data/new_pisces.jsonl"
     test_loader = get_dataloader(embed_path=test_embeds_path, 
-      labels_path=test_labels_path, batch_size=40, device=device, seed=42)
+      labels_path=test_labels_path, batch_size=4, device=device, seed=42)
 
     ## Load model
     print("load Model")
@@ -139,5 +169,5 @@ if __name__ == "__main__":
 
     ## Load Dataset (train and validate)
     print("start Training")
-    # main_training_loop(model=cnn, train_data=train_loader, device=device)
+    main_training_loop(model=cnn, train_data=test_loader, device=device)
     ##
