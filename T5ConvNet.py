@@ -3,7 +3,8 @@ Adapted and modified from Michael Heinzinger Notebook
 https://colab.research.google.com/drive/1TUj-ayG3WO52n5N50S7KH9vtt6zRkdmj?usp=sharing
 """
 
-from transformer import T5EncoderModel, T5Tokenizer
+from transformers import T5EncoderModel, T5Tokenizer
+import torch
 
 class T5CNN(torch.nn.Module):
     def __init__(self):

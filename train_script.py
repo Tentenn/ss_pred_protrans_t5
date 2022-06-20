@@ -42,7 +42,7 @@ class EmbedDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
         # given an index, return embedding and label sequence
         header = self.headers[index]
-        embedding = torch.tensor(self.embeddings[header]).to(self.device)
+        embedding = self.embeddings[header].to(self.device)
         label = self.labels_dict[header]
         return embedding, label
 
@@ -61,18 +61,18 @@ def get_dataloader(embed_path: str, labels_path: str,
     return loader
 
 
-def main_training_loop(model, device):
-    bs = 20
+def main_training_loop(model, train_data, device):
+    bs = 4
     lr = 0.01
-    optimizer = torch.optim.AdamOptimizer
-    epochs = 10
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    epochs = 1
     for i in range(epochs):
-        pass
+        train(model, train_data, optimizer)
 
 
 def train(model: torch.nn.Module,
           train_data: DataLoader,
-          optimizer: torch.optim.Optimizer):
+          optimizer):
     """
     do a train on a minibatch
     :param model:
@@ -97,6 +97,7 @@ def train(model: torch.nn.Module,
         out = model(emb)
 
         # convert label to machine readable.
+        print("label: ", label)
 
         assert out.size() == label.size()  ## (batchsize, length_of_longest_seq, 3)
 
@@ -109,18 +110,34 @@ def validate():
 
 if __name__ == "__main__":
     ## Determine device
+    print("Determine device")
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     ## Data loading
-    train_embeds_path = ""
-    val_embeds_path = ""
+    print("Data loading")
+    train_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/train.jsonl_embeddings.h5"
+    val_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/val.jsonl_embeddings.h5"
 
-    train_labels_path = "train.jsonl"
-    val_labels_path = "val.jsonl"
+    train_labels_path = "data/train.jsonl"
+    val_labels_path = "data/val.jsonl"
+
+    # train_loader = get_dataloader(embed_path=train_embeds_path, 
+    #   labels_path=train_labels_path, batch_size=40, device=device, seed=42)
+
+    # val_loader = get_dataloader(embed_path=val_embeds_path, 
+    #  labels_path=val_labels_path, batch_size=40, device=device, seed=42)
+
+    ### Test loader
+    test_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/new_pisces.jsonl_embeddings.h5"
+    test_labels_path = "data/new_pisces.jsonl"
+    test_loader = get_dataloader(embed_path=test_embeds_path, 
+      labels_path=test_labels_path, batch_size=40, device=device, seed=42)
 
     ## Load model
+    print("load Model")
     cnn = ConvNet()
 
     ## Load Dataset (train and validate)
-    main_training_loop(cnn, device)
+    print("start Training")
+    # main_training_loop(model=cnn, train_data=train_loader, device=device)
     ##
