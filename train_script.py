@@ -11,7 +11,7 @@ from tqdm.auto import tqdm
 import json
 from torch.utils.data import DataLoader, Dataset
 import torch
-from transformers import T5Encoder, T5Tokenizer
+from transformers import T5EncoderModel, T5Tokenizer
 from pathlib import Path
 from pyfaidx import Fasta
 from typing import Dict, Tuple, List
