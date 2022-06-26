@@ -20,10 +20,3 @@ def load_embeddings(embeddings_path):
   with h5py.File(embeddings_path, 'r') as f:
     embeddings_dict = {seq_identifier: torch.tensor(np.array(f[seq_identifier])) for seq_identifier in f.keys()}
   return embeddings_dict
-
-def load_embeddings2(embeddings_path):
-  embeddings_dict = dict()
-  with h5py.File(embeddings_path, 'r') as f:
-    for k in f.keys():
-      embeddings_dict[k] = f[k]
-  return embeddings_dict

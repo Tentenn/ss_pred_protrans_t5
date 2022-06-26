@@ -7,7 +7,6 @@ import torch
 from torch import nn
 import torch.optim as optim
 from typing import Any
-from tqdm.auto import tqdm
 import json
 from torch.utils.data import DataLoader, Dataset
 import torch
@@ -26,9 +25,6 @@ import wandb
 
 import utils
 from ConvNet import ConvNet
-from ConvNet2 import ConvNet2 # Old convnet
-
-gc.enable()
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -42,21 +38,22 @@ class EmbedDataset(Dataset):
     iterated over.
     """
 
-    def __init__(self, embed_path: str, labels_path: str,
+    def __init__(self, embed_path: str, labels_path: str, 
                  device: torch.device):
         self.device = device
         self.embeddings = utils.load_embeddings(embed_path)
-        self.labels_dict = utils.load_labels(labels_path)
+        self.data_dict = utils.load_data(labels_path)
         self.headers = tuple(self.embeddings.keys())
         # Header refers to uniprot id
-        assert len(self.headers) == len(self.labels_dict.keys())
+        assert len(self.headers) == len(self.data_dict.keys()), "dict len not the same"
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
-        # given an index, return embedding and label sequence
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, str]:
+        # given an index, return embedding, label, mask
         header = self.headers[index]
-        embedding = self.embeddings[header].to(self.device)
-        label = self.labels_dict[header]
-        return embedding, label
+        # assert header in self.embeddings.keys(), "key not in dict"
+        embedding = self.embeddings[header]
+        label, mask = self.data_dict[header]
+        return embedding, label, mask
 
     def __len__(self) -> int:
         return len(self.headers)
@@ -93,16 +90,18 @@ def label_to_id(labels: str):
 def custom_collate(data):
   """
   # https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
-  # data is a list of batch size containing 2-tuple 
+  # data is a list of batch size containing 3-tuple 
   # containing embedding and label seq
   """
 
-  inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
+  inputs = [d[0] for d in data] # converting embeds to tensor
   inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
   
-  labels = [d[1] for d in data] # TODO: convert seq to (seqlen, 3) 
+  labels = [d[1] for d in data]
+  res_mask = [torch.tensor([float(dig) for dig in d[2]]) for d in data]
+  mask = pad_sequence(res_mask, batch_first=True)
 
-  return inputs, labels
+  return inputs, labels, mask
 
 def pad_infinite(iterable, padding=None):
    return chain(iterable, repeat(padding))
@@ -119,7 +118,7 @@ def process_label(labels: list):
   max_len = len(max(labels, key=len))
   class_mapping = {"H":[1, 0, 0], "E":[0, 1, 0], "L":[0, 0, 1], "C":[0, 0, 1]}
   processed = [[class_mapping[c] for c in label] for label in labels]
-  # add padding
+  # add padding manually using [0, 0, 0]
   padded = [list(pad(subl, max_len, [0, 0, 0])) for subl in processed]
   return torch.tensor(np.array(padded), dtype=torch.float)
 
@@ -131,7 +130,7 @@ def main_training_loop(model: torch.nn.Module,
     bs = 80
     lr = 0.003
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    epochs = 8
+    epochs = 4
 
     # wandb logging
     config = {"learning_rate": lr,
@@ -144,20 +143,18 @@ def main_training_loop(model: torch.nn.Module,
     best_loss = float('-inf')
 
     for epoch in range(epochs):
-      # train model
+      # train model and save train loss
       t_loss = train(model, train_data, optimizer)
 
-      # validate results
+      # validate results and calculate scores
       q3_accuracy, v_loss = validate(model, val_data)
       wandb.log({"accuracy (Q3)":q3_accuracy})
+      wandb.log({"val_loss":v_loss})
       
       # save model if better
       if q3_accuracy > best_accuracy:
-        
-        EPOCH = 5
+        best_accuracy = q3_accuracy
         PATH = f"{bs}_{lr}_{epochs}_{round(q3_accuracy, 1)}_{t_loss}_cnn.pt"
-        LOSS = 0.4
-
         torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -171,26 +168,33 @@ def train(model: torch.nn.Module,
           optimizer):
     """
     do a train on a minibatch
-    :param model:
-    :param train_data:
-    :param optimizer:
-    :return:
     """
 
     model.train()
     optimizer.zero_grad()
     loss_fn = nn.CrossEntropyLoss()
 
-    all_targets = list()
     losses = []
 
+    # Add resultion mask
+
     for i, batch in enumerate(train_data):
-
-        emb, label = batch
+        assert len(batch) == 3, "Batchsize not 3"
+        emb, label, mask = batch
         optimizer.zero_grad()
-        out = model(emb)
+        out = model(emb) # shape: [bs, max_seq_len, 3]
 
-        labels = process_label(label)
+        labels = process_label(label) #
+
+        # mask out disordered aas
+        out = out * mask.unsqueeze(-1)
+        labels = labels * mask.unsqueeze(-1)
+
+        # remove zero tensors from 2nd dim
+        nonZeroRows = torch.abs(out).sum(dim=2) > 0
+        out = out[nonZeroRows]
+        labels = labels[nonZeroRows]
+        # Experimental
 
         loss = loss_fn(out, labels)
         loss.backward()
@@ -205,15 +209,29 @@ def validate(model: torch.nn.Module,
           val_data: DataLoader):
     model.eval()
     loss_fn = nn.CrossEntropyLoss()
+    
+    last_accuracy = 0
+    losses = []
     for i, batch in enumerate(val_data):
-      emb, label = batch
+      emb, label, mask = batch
       out = model(emb)
-      acc_scores = []
-
       labels = process_label(label)
-      loss = loss_fn(out, labels)
-      wandb.log({"val_loss":loss.item()})
 
+      # mask out disordered aas
+      out = out * mask.unsqueeze(-1)
+      labels = labels * mask.unsqueeze(-1)
+
+      # remove padding and disordered aas (0-vectors)
+      nonZeroRows = torch.abs(out).sum(dim=2) > 0
+      out_f = out[nonZeroRows]
+      labels_f = labels[nonZeroRows]
+
+      # calculate loss
+      loss = loss_fn(out_f, labels_f)
+      losses.append(loss)
+      # wandb.log({"val_loss":loss.item()})
+
+      acc_scores = []
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
@@ -221,11 +239,15 @@ def validate(model: torch.nn.Module,
         seqlen = len(label[batch_idx])
         preds = logits_to_preds(out_logits[:seqlen]) # already in form: [0, 1, 2, 3]
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
+        res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
-        acc = q3_acc(true_label, preds)
+        assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
+        
+        acc = q3_acc(true_label, preds, res_mask)
         acc_scores.append(acc)
-      
-    return sum(acc_scores)/len(acc_scores), np.std(acc_scores)
+      last_accuracy = sum(acc_scores)/len(acc_scores)# , np.std(acc_scores)
+
+    return last_accuracy, sum(losses)/len(losses)
 
 def test(model: torch.nn.Module,
           test_data: DataLoader,
@@ -234,10 +256,10 @@ def test(model: torch.nn.Module,
     verbose argument: whether or not to show actual predictions
     """
     model.eval()
+    acc_scores = []
     for i, batch in enumerate(test_data):
-      emb, label = batch
+      emb, label, mask = batch
       out = model(emb)
-      acc_scores = []
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
@@ -246,7 +268,7 @@ def test(model: torch.nn.Module,
         preds = logits_to_preds(out_logits[:seqlen]) # already in form: [0, 1, 2, 3]
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
 
-        acc = q3_acc(true_label, preds)
+        acc = q3_acc(true_label, preds, mask)
         acc_scores.append(acc)
 
         if verbose:
@@ -260,61 +282,18 @@ def preds_to_seq(preds):
   class_dict = {0:"H",1:"E",2:"C"}
   return "".join([class_dict[c.item()] for c in preds.reshape(-1)])
 
-def q3_acc(y_true, y_pred):
-  return accuracy_score(y_true, y_pred)
+def q3_acc(y_true, y_pred, mask):
+  return accuracy_score(y_true, y_pred, sample_weight=[int(e) for e in mask])
 
 def sov(y_true, y_pred):
   pass
 
-def load_sec_struct_model(path: str, model_type: torch.nn.Module):
-  checkpoint_dir=path
-  state = torch.load(checkpoint_dir, map_location=torch.device('cpu'))
-  model = model_type
-  if type(model_type) == ConvNet2:
-    model.load_state_dict(state['state_dict'])
-  elif type(model_type) == ConvNet:
-    model.load_state_dict(state['model_state_dict'])
-  else:
-    raise Exception
-  model = model.eval()
-  model = model.to(device)
-  # print('Loaded sec. struct. model from epoch: {:.1f}'.format(state['epoch']))
-
-  return model
-
-def predict_test_set():
-  ## Test loader
-  model_my = load_sec_struct_model("/content/drive/MyDrive/BachelorThesis/models/80_0.003_8_0.9_432.8474462689686_cnn.pt", ConvNet())
-
-
-  # Predict on CASP12
-  test_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/casp12.jsonl_embeddings.h5"
-  test_labels_path = "data/casp12.jsonl"
-  test_loader = get_dataloader(embed_path=test_embeds_path, 
-                                labels_path=test_labels_path, 
-                                batch_size=4, device=device, seed=42)
-
-  acc, std = test(model_my, test_loader, verbose=True)
-  print("CASP12", acc, std)
-
-
-
-  # Predict on new_pisces
-  test2_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/new_pisces.jsonl_embeddings.h5"
-  test2_labels_path = "data/new_pisces.jsonl"
-  test2_loader = get_dataloader(embed_path=test2_embeds_path, 
-                                labels_path=test2_labels_path, 
-                                batch_size=4, device=device, seed=42)
-
-  acc, std = test(model_my, test2_loader, verbose=True)
-  print("NEW_PISCES", acc, std)
 
 if __name__ == "__main__":
     ## Collect garbage
     gc.collect()
 
     ## Determine device
-    print("Determine device")
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     ## Data loading
@@ -336,7 +315,7 @@ if __name__ == "__main__":
     # test_labels_path = "data/new_pisces.jsonl"
     # test_loader = get_dataloader(embed_path=test_embeds_path, 
     #   labels_path=test_labels_path, batch_size=4, device=device, seed=42)
-    # ###
+    ###
 
     ## Load model
     print("load Model")
@@ -346,5 +325,4 @@ if __name__ == "__main__":
     print("start Training")
     main_training_loop(model=cnn, train_data=train_loader, val_data=val_loader, device=device)
     
-    ## Test on the available test_sets
-    # predict_test_set()
+    ## 
