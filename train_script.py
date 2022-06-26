@@ -25,39 +25,12 @@ import wandb
 
 import utils
 from ConvNet import ConvNet
+from Dataset import EmbedDataset
 
 """
 This code trains the CNN for 3-State secondary structure prediction
 Using ProtTrans T5 per residue embeddings.
 """
-
-class EmbedDataset(Dataset):
-    """
-    EmbedDataset:
-    This dataset returns the precomputed embeddings and the final label when
-    iterated over.
-    """
-
-    def __init__(self, embed_path: str, labels_path: str, 
-                 device: torch.device):
-        self.device = device
-        self.embeddings = utils.load_embeddings(embed_path)
-        self.data_dict = utils.load_data(labels_path)
-        self.headers = tuple(self.embeddings.keys())
-        # Header refers to uniprot id
-        assert len(self.headers) == len(self.data_dict.keys()), "dict len not the same"
-
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, str]:
-        # given an index, return embedding, label, mask
-        header = self.headers[index]
-        # assert header in self.embeddings.keys(), "key not in dict"
-        embedding = self.embeddings[header]
-        label, mask = self.data_dict[header]
-        return embedding, label, mask
-
-    def __len__(self) -> int:
-        return len(self.headers)
-
 
 def get_dataloader(embed_path: str, labels_path: str,
                    batch_size: int, device: torch.device,
@@ -267,8 +240,12 @@ def test(model: torch.nn.Module,
         seqlen = len(label[batch_idx])
         preds = logits_to_preds(out_logits[:seqlen]) # already in form: [0, 1, 2, 3]
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
+        res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
-        acc = q3_acc(true_label, preds, mask)
+        assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
+        
+        acc = q3_acc(true_label, preds, res_mask)
+
         acc_scores.append(acc)
 
         if verbose:
@@ -283,6 +260,7 @@ def preds_to_seq(preds):
   return "".join([class_dict[c.item()] for c in preds.reshape(-1)])
 
 def q3_acc(y_true, y_pred, mask):
+  print(mask)
   return accuracy_score(y_true, y_pred, sample_weight=[int(e) for e in mask])
 
 def sov(y_true, y_pred):
