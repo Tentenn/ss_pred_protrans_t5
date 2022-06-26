@@ -3,20 +3,18 @@ import torch
 import h5py
 import numpy as np
 
-def load_labels(jsonl_path):
-    """
-    :param jsonl_path: path to jsonl containing info about id, sequence, labels and mask
-    :return: dict containing all
-    example: 5t87-E CCCCCCHHHHHHCCEEEECCEEEEEEECCCCCCEEEEEEEECCEEEEEEECHHHCCHHHHHHHHCCCCCCCCCCCC
-    """
-    with open(jsonl_path) as t:
-        seq_dicts = [json.loads(line) for line in t]
-        labels_dict = dict()
+def load_data(jsonl_path):
+  """
+  :param jsonl_path: path to jsonl containing info about id, sequence, labels and mask
+  :return: dict containing all
+  example: 5t87-E CCCCCCHHHHHHCCEEEECCEEEEEEECCCCCCEEEEEEEECCEEEEEEECHHHCCHHHHHHHHCCCCCCCCCCCC
+  """
+  with open(jsonl_path) as t:
+        data_dict = dict()
         ## Converts the list of dicts (jsonl file) to a single dict with id -> sequence
-
-        for d in seq_dicts:
-            labels_dict[d["id"]] = d["label"]
-    return labels_dict
+        for d in [json.loads(line) for line in t]:
+            data_dict[d["id"]] = d["label"], d["resolved"]
+  return data_dict
 
 def load_embeddings(embeddings_path):
     with h5py.File(embeddings_path, 'r') as f:
