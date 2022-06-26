@@ -16,6 +16,19 @@ def load_data(jsonl_path):
       data_dict[d["id"]] = d["label"], d["resolved"]
   return data_dict
 
+def load_all_data(jsonl_path):
+  """
+  :param jsonl_path: path to jsonl containing info about id, sequence, labels and mask
+  :return: dict containing sequence, label and resolved mask
+  """
+  with open(jsonl_path) as t:
+    data_dict = dict()
+    ## Converts the list of dicts (jsonl file) to a single dict with id -> sequence
+    for d in [json.loads(line) for line in t]:
+      data_dict[d["id"]] = d["sequence"], d["label"], d["resolved"]
+  return data_dict
+
+
 def load_embeddings(embeddings_path):
   with h5py.File(embeddings_path, 'r') as f:
     embeddings_dict = {seq_identifier: torch.tensor(np.array(f[seq_identifier])) for seq_identifier in f.keys()}
