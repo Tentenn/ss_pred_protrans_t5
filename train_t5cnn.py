@@ -19,8 +19,8 @@ import gc
 import wandb
 
 import utils
-from ConvNet import ConvNet
 from Dataset import SequenceDataset
+from T5ConvNet import T5CNN
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -72,6 +72,7 @@ def main_training_loop(model: torch.nn.Module,
     bs = 2
     lr = 0.003
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.CrossEntropyLoss()
     epochs = 1
 
     
@@ -84,14 +85,14 @@ def main_training_loop(model: torch.nn.Module,
     wandb.init(project="t5cnn-ft", entity="kyttang", config=config)
     # track best scores
     best_accuracy = float('-inf')
-    best_loss = float('-inf')
+    # best_loss = float('-inf')
 
     for epoch in range(epochs):
       # train model and save train loss
-      t_loss = train(model, train_data, optimizer)
+      t_loss = train(model, train_data, loss_fn, optimizer)
 
       # validate results and calculate scores
-      q3_accuracy, v_loss = validate(model, val_data)
+      q3_accuracy, v_loss = validate(model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
       
@@ -109,6 +110,7 @@ def main_training_loop(model: torch.nn.Module,
 
 def train(model: torch.nn.Module,
           train_data: DataLoader,
+          loss_fn,
           optimizer):
     """
     do a train on a minibatch
@@ -119,7 +121,7 @@ def train(model: torch.nn.Module,
 
     model.train()
     optimizer.zero_grad()
-    loss_fn = nn.CrossEntropyLoss()
+    
 
     losses = []
 
@@ -141,11 +143,8 @@ def train(model: torch.nn.Module,
 
         # remove zero tensors from 2nd dim
         nonZeroRows = torch.abs(out).sum(dim=2) > 0
-        out = out[nonZeroRows]
-        labels = labels[nonZeroRows]
-        # Experimental
 
-        loss = loss_fn(out, labels)
+        loss = loss_fn(out[nonZeroRows], labels[nonZeroRows])
         loss.backward()
         
         losses.append(loss.item())
@@ -155,9 +154,9 @@ def train(model: torch.nn.Module,
     return sum(losses)/len(losses)
 
 def validate(model: torch.nn.Module,
-          val_data: DataLoader):
+          val_data: DataLoader,
+          loss_fn):
     model.eval()
-    loss_fn = nn.CrossEntropyLoss()
     
     last_accuracy = 0
     losses = []
@@ -174,11 +173,9 @@ def validate(model: torch.nn.Module,
 
       # remove padding and disordered aas (0-vectors)
       nonZeroRows = torch.abs(out).sum(dim=2) > 0
-      out_f = out[nonZeroRows]
-      labels_f = labels[nonZeroRows]
 
       # calculate loss
-      loss = loss_fn(out_f, labels_f)
+      loss = loss_fn(out[nonZeroRows], labels[nonZeroRows])
       losses.append(loss)
       # wandb.log({"val_loss":loss.item()})
 
@@ -241,6 +238,7 @@ def q3_acc(y_true, y_pred, mask):
 def sov(y_true, y_pred):
   pass
 
+
 def custom_collate(data):
       """
       # https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
@@ -277,7 +275,7 @@ if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     ## Data loading
-    print("Data loading")
+    print("(1) Data loading")
     drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
     train_path = drive_path + "train_400.jsonl"
     val_path = drive_path + "val_400.jsonl"
@@ -287,19 +285,19 @@ if __name__ == "__main__":
     # val_loader = get_dataloader(jsonl_path=val_path, batch_size=40, device=device, seed=42)
 
     ## Test loader
-    casp12_path = drive_path + "casp12_200.jsonl"
+    casp12_path = drive_path + "casp12_100.jsonl"
     casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=42)
 
-    npis_path = drive_path + "new_pisces_200.jsonl"
+    npis_path = drive_path + "new_pisces_100.jsonl"
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=42)
     ##
 
     ## Load model
-    print("load Model")
+    print("(2) load Model")
     model = T5CNN().to(device)
 
     ## Train and validate (train and validate)
-    print("start Training")
+    print("(3) start Training")
     main_training_loop(model=model, train_data=npis_loader, val_data=casp12_loader, device=device)
     
     ## 
