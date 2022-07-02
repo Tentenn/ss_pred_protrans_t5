@@ -21,6 +21,7 @@ import wandb
 import utils
 from Dataset import SequenceDataset
 from T5ConvNet import T5CNN
+from ProtBertCcnn import ProtBertCNN
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -67,9 +68,10 @@ def process_label(labels: list):
 
 def main_training_loop(model: torch.nn.Module, 
                        train_data: DataLoader, 
-                       val_data: DataLoader, 
+                       val_data: DataLoader,
+                       batch_size: int, 
                        device):
-    bs = 2
+    batch_size = 4
     lr = 0.003
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
@@ -80,7 +82,7 @@ def main_training_loop(model: torch.nn.Module,
     # wandb logging
     config = {"learning_rate": lr,
               "epochs": epochs,
-              "batch_size": bs,
+              "batch_size": batch_size,
               "optimizer": optimizer}
     wandb.init(project="t5cnn-ft", entity="kyttang", config=config)
     # track best scores
@@ -126,7 +128,6 @@ def train(model: torch.nn.Module,
     losses = []
 
     for i, batch in enumerate(train_data):
-        assert len(batch) == 3, "Batchsize not 3"
         ids, label, mask = batch
 
         ids = ids.to(device)
@@ -270,12 +271,13 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
 if __name__ == "__main__":
     ## Collect garbage
     gc.collect()
+    batch_size = 1
 
     ## Determine device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     ## Data loading
-    print("(1) Data loading")
+    print("(1) Data loading...", end="")
     drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
     train_path = drive_path + "train_400.jsonl"
     val_path = drive_path + "val_400.jsonl"
@@ -285,19 +287,20 @@ if __name__ == "__main__":
     # val_loader = get_dataloader(jsonl_path=val_path, batch_size=40, device=device, seed=42)
 
     ## Test loader
-    casp12_path = drive_path + "casp12_100.jsonl"
-    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=42)
+    casp12_path = drive_path + "casp12_400.jsonl"
+    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=42)
 
-    npis_path = drive_path + "new_pisces_100.jsonl"
-    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=42)
+    npis_path = drive_path + "new_pisces_400.jsonl"
+    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=42)
     ##
 
+
     ## Load model
-    print("(2) load Model")
-    model = T5CNN().to(device)
+    print("Check! \n (2) load Model...", end="")
+    model = ProtBertCNN().to(device)
 
     ## Train and validate (train and validate)
-    print("(3) start Training")
-    main_training_loop(model=model, train_data=npis_loader, val_data=casp12_loader, device=device)
+    print("Check! \n (3) start Training.. ")
+    main_training_loop(model=model, train_data=npis_loader, val_data=casp12_loader, device=device, batch_size=batch_size)
     
     ## 

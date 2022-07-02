@@ -22,6 +22,7 @@ from itertools import chain, repeat, islice
 from sklearn.metrics import accuracy_score
 import gc
 import wandb
+import sys
 
 import utils
 from ConvNet import ConvNet
@@ -58,7 +59,7 @@ def label_to_id(labels: str):
   """
   class_mapping = {"H":0, "E":1, "L":2, "C":2} 
   converted = [[class_mapping[c] for c in label] for label in labels]
-  return torch.tensor(converted)
+  return torch.tensor(converted).squeeze(-1)
 
 def custom_collate(data):
   """
@@ -82,18 +83,29 @@ def pad_infinite(iterable, padding=None):
 def pad(iterable, size, padding=None):
    return islice(pad_infinite(iterable, padding), size)
 
-def process_label(labels: list):
+def process_label(labels: list, mask:list, onehot=True):
   """
   turns a list of labels ['HEECCC', 'HHHEEEECCC'] to one hot encoded tensor
   and add padding e.g torch.tensor([[1, 0, 0], [0, 0, 1], [0, 0, 0]])
   """
 
-  max_len = len(max(labels, key=len))
-  class_mapping = {"H":[1, 0, 0], "E":[0, 1, 0], "L":[0, 0, 1], "C":[0, 0, 1]}
-  processed = [[class_mapping[c] for c in label] for label in labels]
-  # add padding manually using [0, 0, 0]
-  padded = [list(pad(subl, max_len, [0, 0, 0])) for subl in processed]
-  return torch.tensor(np.array(padded), dtype=torch.float)
+  max_len = len(max(labels, key=len)) # determine longest sequence in list
+  processed = []
+  if onehot:
+    class_mapping = {"H":[1, 0, 0], "E":[0, 1, 0], "L":[0, 0, 1], "C":[0, 0, 1]}
+    processed = [[class_mapping[c] for c in label] for label in labels]
+    # add padding manually using [0, 0, 0]
+    processed = [list(pad(subl, max_len, [0, 0, 0])) for subl in processed]
+  else:
+    class_mapping = {"H":0, "E":1, "L":2, "C":2}
+    processed = [[class_mapping[c] for c in label] for label in labels]
+    # add mask
+    for i,e in enumerate(mask):
+      pel = [-1 if e[j]==0 else p for j,p in enumerate(processed[i])]
+      processed[i] = pel
+    # add padding
+    processed = [list(pad(subl, max_len, -1)) for subl in processed]
+    return torch.tensor(np.array(processed), dtype=torch.long)
 
 
 def main_training_loop(model: torch.nn.Module, 
@@ -101,7 +113,7 @@ def main_training_loop(model: torch.nn.Module,
                        val_data: DataLoader, 
                        device):
     bs = 80
-    lr = 0.003
+    lr = 0.01
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     epochs = 4
 
@@ -145,29 +157,32 @@ def train(model: torch.nn.Module,
 
     model.train()
     optimizer.zero_grad()
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
     losses = []
 
-    # Add resultion mask
-
     for i, batch in enumerate(train_data):
-        assert len(batch) == 3, "Batchsize not 3"
         emb, label, mask = batch
         optimizer.zero_grad()
         out = model(emb) # shape: [bs, max_seq_len, 3]
 
-        labels = process_label(label) #
+        # string to float conversion, padding and mask labels
+        labels = process_label(label, mask=mask, onehot=False)
 
-        # mask out disordered aas
-        out = out * mask.unsqueeze(-1)
-        labels = labels * mask.unsqueeze(-1)
+        # reshape to make loss work 
+        max_batch_len = len(labels[0])
+        bs = len(label)
+        out = torch.transpose(out, 1, 2)
 
-        # remove zero tensors from 2nd dim
-        nonZeroRows = torch.abs(out).sum(dim=2) > 0
-        out = out[nonZeroRows]
-        labels = labels[nonZeroRows]
-        # Experimental
+        # # mask out disordered aas
+        # out = out * mask.unsqueeze(-1)
+        # labels = labels * mask.unsqueeze(-1)
+
+        # # remove zero tensors from 2nd dim
+        # nonZeroRows = torch.abs(out).sum(dim=2) > 0
+        # out = out[nonZeroRows]
+        # labels = labels[nonZeroRows]
+        # # Experimental
 
         loss = loss_fn(out, labels)
         loss.backward()
@@ -181,25 +196,22 @@ def train(model: torch.nn.Module,
 def validate(model: torch.nn.Module,
           val_data: DataLoader):
     model.eval()
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
     
     last_accuracy = 0
     losses = []
     for i, batch in enumerate(val_data):
       emb, label, mask = batch
-      out = model(emb)
-      labels = process_label(label)
+      out = model(emb) # shape: [bs, max_seq_len, 3]
+      # string to float conversion
+      labels_f = process_label(label, mask=mask, onehot=False)
 
-      # mask out disordered aas
-      out = out * mask.unsqueeze(-1)
-      labels = labels * mask.unsqueeze(-1)
+      # reshape to make loss work 
+      max_batch_len = len(labels_f[0])
+      bs = len(label)
+      out_f = torch.transpose(out, 1, 2)
 
-      # remove padding and disordered aas (0-vectors)
-      nonZeroRows = torch.abs(out).sum(dim=2) > 0
-      out_f = out[nonZeroRows]
-      labels_f = labels[nonZeroRows]
-
-      # calculate loss
+      # calculate loss, ignores -1 elements (padding and masking)
       loss = loss_fn(out_f, labels_f)
       losses.append(loss)
       # wandb.log({"val_loss":loss.item()})
@@ -214,7 +226,8 @@ def validate(model: torch.nn.Module,
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
         res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
-        assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
+        print(seqlen, len(preds), len(res_mask))
+        assert seqlen == len(preds) == len(res_mask), f"length of seqs not matching"
         
         acc = q3_acc(true_label, preds, res_mask)
         acc_scores.append(acc)
@@ -233,11 +246,13 @@ def test(model: torch.nn.Module,
     for i, batch in enumerate(test_data):
       emb, label, mask = batch
       out = model(emb)
+      print(out.shape)
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
 
         seqlen = len(label[batch_idx])
+        # print(out_logits)
         preds = logits_to_preds(out_logits[:seqlen]) # already in form: [0, 1, 2, 3]
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
         res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
@@ -260,7 +275,8 @@ def preds_to_seq(preds):
   return "".join([class_dict[c.item()] for c in preds.reshape(-1)])
 
 def q3_acc(y_true, y_pred, mask):
-  print(mask)
+  # print("ytrue: ", y_true)
+  # print("ypred: ", y_pred)
   return accuracy_score(y_true, y_pred, sample_weight=[int(e) for e in mask])
 
 def sov(y_true, y_pred):
