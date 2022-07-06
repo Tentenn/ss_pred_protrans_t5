@@ -335,7 +335,7 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
 if __name__ == "__main__":
     ## Collect garbage
     gc.collect()
-    batch_size = 15
+    batch_size = 1
     max_emb_size = 305
 
     ## Determine device
@@ -347,33 +347,34 @@ if __name__ == "__main__":
     train_path = drive_path + "train_200.jsonl"
     val_path = drive_path + "val_200.jsonl"
 
-    train_loader = get_dataloader(jsonl_path=train_path, 
-                                  batch_size=batch_size, 
-                                  device=device, seed=42,
-                                  max_emb_size=max_emb_size)
+    # train_loader = get_dataloader(jsonl_path=train_path, 
+    #                               batch_size=batch_size, 
+    #                               device=device, seed=42,
+    #                               max_emb_size=max_emb_size)
 
-    val_loader = get_dataloader(jsonl_path=val_path, 
-                                batch_size=batch_size, 
-                                device=device, seed=42,
-                                max_emb_size=max_emb_size)
+    # val_loader = get_dataloader(jsonl_path=val_path, 
+    #                             batch_size=batch_size, 
+    #                             device=device, seed=42,
+    #                             max_emb_size=max_emb_size)
 
-    ## Test loader
-    # casp12_path = drive_path + "casp12_300.jsonl"
-    # casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=42,
-    #                              max_emb_size=max_emb_size)
+    # Test loader
+    casp12_path = drive_path + "casp12_100.jsonl"
+    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=42,
+                                 max_emb_size=max_emb_size)
 
-    # npis_path = drive_path + "new_pisces_300.jsonl"
-    # npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=42,
-    #                              max_emb_size=max_emb_size)
-    ##
+    npis_path = drive_path + "new_pisces_100.jsonl"
+    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=42,
+                                 max_emb_size=max_emb_size)
+    #
 
 
     ## Load model
     print("load Model...", end="")
-    model = ProtBertCNN().to(device)
+    # model = ProtBertCNN().to(device)
+    model = T5CNN().to(device)
 
     ## Train and validate (train and validate)
     print("start Training.. ")
-    main_training_loop(model=model, train_data=train_loader, val_data=val_loader, device=device, batch_size=batch_size)
+    main_training_loop(model=model, train_data=casp12_loader, val_data=casp12_loader, device=device, batch_size=batch_size)
     
     ## Test data

@@ -28,19 +28,13 @@ class T5CNN(torch.nn.Module):
         #     torch.nn.ReLU()
         # )
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids):
         # trim ids (last item of each seq)
         input_ids = input_ids[:,:-1]
-        assert input_ids.shape == attention_mask.shape, f"input_ids: {input_ids.shape}, mask: {attention_mask.shape}"
+        # assert input_ids.shape == attention_mask.shape, f"input_ids: {input_ids.shape}, mask: {attention_mask.shape}"
         
         # create embeddings
-        emb = self.t5(input_ids, attention_mask=attention_mask).last_hidden_state
-
-        # remove special tokens
-
-        # dropout?
-
-        # padding
+        emb = self.t5(input_ids).last_hidden_state
 
         # old architecture
         emb = emb.permute(0, 2, 1).unsqueeze(dim=-1)

@@ -43,6 +43,8 @@ class SequenceDataset(Dataset):
     def __init__(self, jsonl_path: str,
                  device: torch.device,
                  max_emb_size=200):
+        self.tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+        # self.tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
         self.device = device
         self.max_emb_size = max_emb_size
         self.data_dict = utils.load_all_data(jsonl_path)
@@ -50,22 +52,19 @@ class SequenceDataset(Dataset):
         # Header refers to uniprot id
         assert len(self.headers) == len(self.data_dict.keys()), "dict len not the same"
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, str]:
+    def __getitem__(self, index: int): # -> Tuple[torch.Tensor, int, str]:
         # given an index, return ids, label, mask
         header = self.headers[index]
         sequence, label, mask = self.data_dict[header]
-        # tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
-        tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
-
-        
-        # print(f"{type(label)}, {type(mask)}")
-        # Preprocess sequence to ProtTrans format
+      
+        # trim length to max_len
         if len(sequence) > self.max_emb_size:
           sequence, label, mask = self.retr_seg(sequence, label, mask, self.max_emb_size)
 
+        # Preprocess sequence to ProtTrans format
         sequence = " ".join(sequence)
         prepro = re.sub(r"[UZOB]", "X", sequence)
-        ids = tokenizer.encode(prepro)
+        ids = self.tokenizer.encode(prepro)
         
         assert len(label) == len(mask), "label and mask Not the same length (__getitem__)"
         return ids, label, mask
