@@ -12,21 +12,21 @@ class T5CNN(torch.nn.Module):
 
         self.t5 = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
 
-        # self.elmo_feature_extractor = torch.nn.Sequential(
-        #     torch.nn.Conv2d(1024, 32, kernel_size=(7, 1), padding=(3, 0)),  # 7x32
-        #     torch.nn.ReLU(),
-        #     torch.nn.Dropout(0.25),
-        # )
-        # n_final_in = 32
-        # self.dssp3_classifier = torch.nn.Sequential(
-        #     torch.nn.Conv2d(n_final_in, 3, kernel_size=(7, 1), padding=(3, 0))  # 7
-        # )
-        self.one_linear = torch.nn.Sequential(
-            torch.nn.Linear(1024, 3),
-            # torch.nn.ReLU(),
-            # torch.nn.Linear(128, 3),
-            torch.nn.ReLU()
+        self.elmo_feature_extractor = torch.nn.Sequential(
+            torch.nn.Conv2d(1024, 32, kernel_size=(7, 1), padding=(3, 0)),  # 7x32
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.15),
         )
+        n_final_in = 32
+        self.dssp3_classifier = torch.nn.Sequential(
+            torch.nn.Conv2d(n_final_in, 3, kernel_size=(7, 1), padding=(3, 0))  # 7
+        )
+        # self.one_linear = torch.nn.Sequential(
+        #     torch.nn.Linear(1024, 3),
+        #     # torch.nn.ReLU(),
+        #     # torch.nn.Linear(128, 3),
+        #     torch.nn.ReLU()
+        # )
 
     def forward(self, input_ids, attention_mask):
         # trim ids (last item of each seq)
@@ -43,8 +43,8 @@ class T5CNN(torch.nn.Module):
         # padding
 
         # old architecture
-        # emb = emb.permute(0, 2, 1).unsqueeze(dim=-1)
-        # emb = self.elmo_feature_extractor(emb)  # OUT: (B x 32 x L x 1)
-        # d3_Yhat = self.dssp3_classifier(emb).squeeze(dim=-1).permute(0, 2, 1)  # OUT: (B x L x 3)
-        d3_Yhat = self.one_linear(emb)
+        emb = emb.permute(0, 2, 1).unsqueeze(dim=-1)
+        emb = self.elmo_feature_extractor(emb)  # OUT: (B x 32 x L x 1)
+        d3_Yhat = self.dssp3_classifier(emb).squeeze(dim=-1).permute(0, 2, 1)  # OUT: (B x L x 3)
+        # d3_Yhat = self.one_linear(emb)
         return d3_Yhat

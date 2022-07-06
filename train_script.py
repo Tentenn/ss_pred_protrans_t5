@@ -170,8 +170,6 @@ def train(model: torch.nn.Module,
         labels = process_label(label, mask=mask, onehot=False)
 
         # reshape to make loss work 
-        max_batch_len = len(labels[0])
-        bs = len(label)
         out = torch.transpose(out, 1, 2)
 
         # # mask out disordered aas
