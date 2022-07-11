@@ -23,7 +23,7 @@ import random
 import utils
 from Dataset import SequenceDataset
 from T5ConvNet import T5CNN
-from ProtBertCcnn import ProtBertCNN
+
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -117,14 +117,16 @@ def main_training_loop(model: torch.nn.Module,
       t_loss = train(model, train_data, loss_fn, optimizer, grad_accum)
 
       # validate results and calculate scores
+      print(f"validate epoch {epoch}")
       q3_accuracy, v_loss = validate(model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
       
       # save model if better
       if q3_accuracy > best_accuracy:
+        print("model saved")
         best_accuracy = q3_accuracy
-        PATH = f"{batch_size}_{lr}_{epochs}_{round(q3_accuracy, 1)}_{t_loss}_cnn.pt"
+        PATH = f"{batch_size}_{grad_accum}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{round(t_loss, 3)}_cnn.pt"
         torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -149,7 +151,7 @@ def train(model: torch.nn.Module,
     # batch accumulation parameter
     accum_iter = grad_accum
     for i, batch in enumerate(train_data):
-        print(f"batch-{i}")
+        # print(f"batch-{i}")
         ids, label, mask = batch
         ids = ids.to(device)
         mask = mask.to(device)
@@ -161,7 +163,7 @@ def train(model: torch.nn.Module,
           # reshape to make loss work 
           out = torch.transpose(out, 1, 2)
           assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
-          loss = loss_fn(out, labels)#  / accum_iter
+          loss = loss_fn(out, labels) / accum_iter
           loss.backward()
           total_loss += loss.item()
           count += 1
@@ -169,10 +171,8 @@ def train(model: torch.nn.Module,
 
           # weights update
           if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
-            print(f"update")
             optimizer.step()
             optimizer.zero_grad()
-            print("update done")
     return total_loss/count
 
 def validate(model: torch.nn.Module,
@@ -276,9 +276,9 @@ def custom_collate(data):
       # inputs = [d[0] for d in data]
       inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
 
-      now = datetime.now()
-      current_time = now.strftime("%H:%M:%S")
-      print(f"[{current_time}] shape", inputs.shape)
+      # now = datetime.now()
+      # current_time = now.strftime("%H:%M:%S")
+      # print(f"[{current_time}] shape", inputs.shape)
       
       labels = [d[1] for d in data]
       res_mask = [torch.tensor([float(dig) for dig in d[2]]) for d in data]
@@ -297,10 +297,10 @@ def seq_collate(data):
   inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
   inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
 
-  now = datetime.now()
-  current_time = now.strftime("%H:%M:%S")
-  print(f"[{current_time}] shape", inputs.shape)
-  print(inputs)
+  # now = datetime.now()
+  # current_time = now.strftime("%H:%M:%S")
+  # print(f"[{current_time}] shape", inputs.shape)
+  # print(inputs)
   
   labels = [d[1] for d in data]
   res_mask = [torch.tensor([float(dig) for dig in d[2]]) for d in data]
@@ -320,32 +320,32 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
     return loader
 
 if __name__ == "__main__":
-    batch_size = 2
+    batch_size = 12
     grad_accum = 10
     max_emb_size = 305
     optimizer_name = "adam"
     lr = 0.0001
     loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
-    epochs = 1
+    epochs = 4
     model_type = "pt5-cnn"
     seed = 42
 
     ## Determine device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     ## Data loading
-    drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
+    drive_path = "/home/ubuntu/instance1/data/"
     train_path = drive_path + "train_200.jsonl"
     val_path = drive_path + "val_200.jsonl"
 
-    # train_loader = get_dataloader(jsonl_path=train_path, 
-    #                               batch_size=batch_size, 
-    #                               device=device, seed=42,
-    #                               max_emb_size=max_emb_size)
+    train_loader = get_dataloader(jsonl_path=train_path, 
+                                  batch_size=batch_size, 
+                                  device=device, seed=42,
+                                  max_emb_size=max_emb_size)
 
-    # val_loader = get_dataloader(jsonl_path=val_path, 
-    #                             batch_size=batch_size, 
-    #                             device=device, seed=42,
-    #                             max_emb_size=max_emb_size)
+    val_loader = get_dataloader(jsonl_path=val_path, 
+                                batch_size=batch_size, 
+                                device=device, seed=42,
+                                max_emb_size=max_emb_size)
 
     # Test loader
     casp12_path = drive_path + "casp12_300.jsonl"
@@ -365,8 +365,8 @@ if __name__ == "__main__":
       assert False, f"Model type not implemented {model_type}"
 
     # For testing and logging
-    train_data = npis_loader
-    val_data = casp12_loader
+    train_data = train_loader
+    val_data = val_loader
 
     # wandb logging
     config = {"lr": str(lr).replace("0.", ""),
