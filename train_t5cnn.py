@@ -108,7 +108,7 @@ def main_training_loop(model: torch.nn.Module,
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
-    best_accuracy = 0.87 # float('-inf')
+    best_accuracy = 0.91 # float('-inf')
     # best_loss = float('-inf')
 
     for epoch in range(epochs):
@@ -163,7 +163,7 @@ def train(model: torch.nn.Module,
           # reshape to make loss work 
           out = torch.transpose(out, 1, 2)
           assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
-          loss = loss_fn(out, labels) / accum_iter
+          loss = loss_fn(out, labels)
           loss.backward()
           total_loss += loss.item()
           count += 1
@@ -320,22 +320,24 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
     return loader
 
 if __name__ == "__main__":
-    batch_size = 12
-    grad_accum = 10
-    max_emb_size = 305
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    wandb_note = "First test using all sequences in full length w/o smart batch sizes"
+    batch_size = 1
+    grad_accum = 50
+    max_emb_size = 2000
     optimizer_name = "adam"
-    lr = 0.0001
+    lr = 0.001
     loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
     epochs = 4
     model_type = "pt5-cnn"
+    dropout = 0.25
     seed = 42
 
-    ## Determine device
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     ## Data loading
     drive_path = "/home/ubuntu/instance1/data/"
-    train_path = drive_path + "train_200.jsonl"
-    val_path = drive_path + "val_200.jsonl"
+    train_path = drive_path + "train.jsonl"
+    val_path = drive_path + "val.jsonl"
 
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
@@ -360,7 +362,7 @@ if __name__ == "__main__":
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
     elif model_type == "pbert-cnn":
-      model = ProtBertCNN().to(device)
+      model = ProtBertCNN(dropout=dropout).to(device)
     else:
       assert False, f"Model type not implemented {model_type}"
 
@@ -376,12 +378,14 @@ if __name__ == "__main__":
               "optim_name": optimizer_name,
               "model_type": model_type,
               "loss_fn": loss_fn,
+              "dropout": dropout,
               "train_path": train_path,
               "val_path": val_path,
               "casp12_path": casp12_path,
               "npis_path": npis_path,
               "train_size": len(train_data),
-              "val_size": len(val_data)
+              "val_size": len(val_data),
+              "wandb_note": wandb_note
               }
     experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
     wandb.init(project="t5cnn-ft", entity="kyttang", config=config, name=experiment_name)

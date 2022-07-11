@@ -7,7 +7,7 @@ from transformers import T5EncoderModel, T5Tokenizer
 import torch
 
 class T5CNN(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, dropout=0.25):
         super(T5CNN, self).__init__()
 
         self.t5 = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
@@ -15,7 +15,7 @@ class T5CNN(torch.nn.Module):
         self.elmo_feature_extractor = torch.nn.Sequential(
             torch.nn.Conv2d(1024, 32, kernel_size=(7, 1), padding=(3, 0)),  # 7x32
             torch.nn.ReLU(),
-            torch.nn.Dropout(0.15),
+            torch.nn.Dropout(dropout),
         )
         n_final_in = 32
         self.dssp3_classifier = torch.nn.Sequential(
