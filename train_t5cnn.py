@@ -96,19 +96,17 @@ def main_training_loop(model: torch.nn.Module,
                        train_data: DataLoader, 
                        val_data: DataLoader,
                        batch_size: int, 
+                       lr: float,
+                       epochs: int,
+                       grad_accum: int,
+                       optimizer_name: str,
+                       loss_fn,
                        device):
-
-    lr = 0.0001
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
-    epochs = 3
-
-    # wandb logging
-    config = {"learning_rate": lr,
-              "epochs": epochs,
-              "batch_size": batch_size,
-              "optimizer": optimizer}
-    wandb.init(project="t5cnn-ft", entity="kyttang", config=config)
+    
+    if optimizer_name == "adam":
+      optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    else:
+      assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
     best_accuracy = 0.87 # float('-inf')
     # best_loss = float('-inf')
@@ -116,7 +114,7 @@ def main_training_loop(model: torch.nn.Module,
     for epoch in range(epochs):
       # train model and save train loss
       print(f"train epoch {epoch}")
-      t_loss = train(model, train_data, loss_fn, optimizer)
+      t_loss = train(model, train_data, loss_fn, optimizer, grad_accum)
 
       # validate results and calculate scores
       q3_accuracy, v_loss = validate(model, val_data, loss_fn)
@@ -138,53 +136,43 @@ def main_training_loop(model: torch.nn.Module,
 def train(model: torch.nn.Module,
           train_data: DataLoader,
           loss_fn,
-          optimizer):
+          optimizer,
+          grad_accum):
     """
     do a train on a minibatch
-    
-    Experimentell übergeben wir die resolution mask 
-    während dem embeddings generieren
     """
     gc.collect()
     model.train()
-    optimizer.zero_grad()
-    
-
+    # optimizer.zero_grad()
     total_loss = 0
     count = 0
+    # batch accumulation parameter
+    accum_iter = grad_accum
     for i, batch in enumerate(train_data):
+        print(f"batch-{i}")
         ids, label, mask = batch
         ids = ids.to(device)
         mask = mask.to(device)
+        # passes and weights update
+        with torch.set_grad_enabled(True):
+          out = model(ids) # shape: [bs, max_seq_len, 3]
+          # string to float conversion, padding and mask labels
+          labels = process_labels(label, mask=mask, onehot=False).to(device)
+          # reshape to make loss work 
+          out = torch.transpose(out, 1, 2)
+          assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
+          loss = loss_fn(out, labels)#  / accum_iter
+          loss.backward()
+          total_loss += loss.item()
+          count += 1
+          wandb.log({"train_loss":loss.item()}) # logs loss for each batch
 
-        optimizer.zero_grad()
-        out = model(ids) # shape: [bs, max_seq_len, 3]
-
-        # string to float conversion, padding and mask labels
-        labels = process_labels(label, mask=mask, onehot=False).to(device)
-
-        # reshape to make loss work 
-        out = torch.transpose(out, 1, 2)
-
-        # labels = process_label(label).to(device)
-
-        # # mask out disordered aas
-        # out = out * mask.unsqueeze(-1)
-        # labels = labels * mask.unsqueeze(-1)
-
-        # # remove zero tensors from 2nd dim
-        # nonZeroRows = torch.abs(out).sum(dim=2) > 0
-
-        assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
-
-        loss = loss_fn(out, labels)
-        loss.backward()
-        
-        total_loss += loss.item()
-        count += 1
-        wandb.log({"train_loss":loss.item()}) # logs loss for each batch
-
-        optimizer.step()
+          # weights update
+          if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
+            print(f"update")
+            optimizer.step()
+            optimizer.zero_grad()
+            print("update done")
     return total_loss/count
 
 def validate(model: torch.nn.Module,
@@ -330,19 +318,20 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
                         shuffle=True, collate_fn=custom_collate)
     return loader
 
-
-
 if __name__ == "__main__":
-    ## Collect garbage
-    gc.collect()
     batch_size = 1
+    grad_accum = 2
     max_emb_size = 305
+    optimizer_name = "adam"
+    lr = 0.0001
+    loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
+    epochs = 1
+    model_type = "pt5-cnn"
+    seed = 42
 
     ## Determine device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
     ## Data loading
-    print("Data loading...", end="")
     drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
     train_path = drive_path + "train_200.jsonl"
     val_path = drive_path + "val_200.jsonl"
@@ -359,22 +348,54 @@ if __name__ == "__main__":
 
     # Test loader
     casp12_path = drive_path + "casp12_100.jsonl"
-    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=42,
+    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=seed,
                                  max_emb_size=max_emb_size)
 
     npis_path = drive_path + "new_pisces_100.jsonl"
-    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=42,
+    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=seed,
                                  max_emb_size=max_emb_size)
-    #
 
+    # Chose model
+    if model_type == "pt5-cnn":
+      model = T5CNN().to(device)
+    elif model_type == "pbert-cnn":
+      model = ProtBertCNN().to(device)
+    else:
+      assert False, f"Model type not implemented {model_type}"
 
-    ## Load model
-    print("load Model...", end="")
-    # model = ProtBertCNN().to(device)
-    model = T5CNN().to(device)
+    # For testing and logging
+    train_data = casp12_loader
+    val_data = casp12_loader
 
-    ## Train and validate (train and validate)
-    print("start Training.. ")
-    main_training_loop(model=model, train_data=casp12_loader, val_data=casp12_loader, device=device, batch_size=batch_size)
+    # wandb logging
+    config = {"lr": str(lr).replace("0.", ""),
+              "epochs": epochs,
+              "batch_size": batch_size,
+              "grad_accum": grad_accum,
+              "optim_name": optimizer_name,
+              "model_type": model_type,
+              "loss_fn": loss_fn,
+              "train_path": train_path,
+              "val_path": val_path,
+              "casp12_path": casp12_path,
+              "npis_path": npis_path,
+              "train_size": len(train_data),
+              "val_size": len(val_data)
+              }
+    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
+    wandb.init(project="t5cnn-ft", entity="kyttang", config=config, name=experiment_name)
+
+    # start training
+    gc.collect()
+    main_training_loop(model=model, 
+                        train_data=train_data, 
+                        val_data=val_data, 
+                        device=device, 
+                        batch_size=batch_size,
+                        lr=lr,
+                        epochs=epochs,
+                        grad_accum=grad_accum,
+                        optimizer_name=optimizer_name,
+                        loss_fn=loss_fn)
     
-    ## Test data
+    ## Test data (TODO)
