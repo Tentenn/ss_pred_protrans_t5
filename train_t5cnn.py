@@ -191,7 +191,8 @@ def validate(model: torch.nn.Module,
       ids = ids.to(device)
       mask = mask.to(device)
 
-      out = model(ids)
+      with torch.no_grad():
+        out = model(ids)
 
 
       # reshape to make loss work 
@@ -319,8 +320,8 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
     return loader
 
 if __name__ == "__main__":
-    batch_size = 1
-    grad_accum = 2
+    batch_size = 2
+    grad_accum = 10
     max_emb_size = 305
     optimizer_name = "adam"
     lr = 0.0001
@@ -347,11 +348,11 @@ if __name__ == "__main__":
     #                             max_emb_size=max_emb_size)
 
     # Test loader
-    casp12_path = drive_path + "casp12_100.jsonl"
+    casp12_path = drive_path + "casp12_300.jsonl"
     casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=seed,
                                  max_emb_size=max_emb_size)
 
-    npis_path = drive_path + "new_pisces_100.jsonl"
+    npis_path = drive_path + "new_pisces_300.jsonl"
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=seed,
                                  max_emb_size=max_emb_size)
 
@@ -364,7 +365,7 @@ if __name__ == "__main__":
       assert False, f"Model type not implemented {model_type}"
 
     # For testing and logging
-    train_data = casp12_loader
+    train_data = npis_loader
     val_data = casp12_loader
 
     # wandb logging
