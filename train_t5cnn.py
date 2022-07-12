@@ -19,11 +19,13 @@ import gc
 import wandb
 from datetime import datetime
 import random
+import argparse
+
 
 import utils
 from Dataset import SequenceDataset
 from T5ConvNet import T5CNN
-
+from smart_optim import Adamax
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -105,34 +107,40 @@ def main_training_loop(model: torch.nn.Module,
     
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_name == "adamax":
+      optimizer = Adamax(model.parameters(), lr=lr)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
-    best_accuracy = 0.91 # float('-inf')
+    best_accuracy = float('-inf')
     # best_loss = float('-inf')
 
     for epoch in range(epochs):
       # train model and save train loss
       print(f"train epoch {epoch}")
       t_loss = train(model, train_data, loss_fn, optimizer, grad_accum)
+      print("t_loss:",t_loss)
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
       q3_accuracy, v_loss = validate(model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
+      print("acc:", q3_accuracy)
       
       # save model if better
       if q3_accuracy > best_accuracy:
         print("model saved")
         best_accuracy = q3_accuracy
-        PATH = f"{batch_size}_{grad_accum}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{round(t_loss, 3)}_cnn.pt"
-        torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': t_loss,
-                    }, PATH)
+        # PATH = f"/home/ubuntu/instance1/datamodels/{batch_size}_{grad_accum}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{round(t_loss, 3)}_cnn.pt"
+        PATH = "model.pt"
+        # torch.save({
+        #             'epoch': epoch,
+        #             'model_state_dict': model.state_dict(),
+        #             'optimizer_state_dict': optimizer.state_dict(),
+        #             'loss': t_loss,
+        #             }, PATH)
+        torch.save(model.state_dict(), PATH)
 
 
 def train(model: torch.nn.Module,
@@ -232,16 +240,22 @@ def test(model: torch.nn.Module,
     model.eval()
     acc_scores = []
     for i, batch in enumerate(test_data):
-      emb, label, mask = batch
-      out = model(emb)
+      ids, label, mask = batch
+
+      labels_f = process_labels(label, mask=mask, onehot=False).to(device)
+      ids = ids.to(device)
+      mask = mask.to(device)
+
+      with torch.no_grad():
+        out = model(ids)
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
 
         seqlen = len(label[batch_idx])
-        preds = logits_to_preds(out_logits[:seqlen]).cpu() # already in form: [0, 1, 2, 3]
-        true_label = label_to_id(label[batch_idx]).cpu() # convert label to machine readable.
-        res_mask = mask[batch_idx][:seqlen].cpu() # [:seqlen] to cut the padding
+        preds = logits_to_preds(out_logits[:seqlen]) # already in form: [0, 1, 2, 3
+        true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
+        res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
         assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
         acc = q3_acc(true_label, preds, res_mask)
@@ -250,6 +264,7 @@ def test(model: torch.nn.Module,
         if verbose:
           print(f"prediction:\t", preds_to_seq(preds))
           print(f"true label:\t", label[batch_idx])
+          print("accuracy:\t", acc)
           print()
       
     return sum(acc_scores)/len(acc_scores), np.std(acc_scores)
@@ -321,23 +336,41 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
 
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    wandb_note = "First test using all sequences in full length w/o smart batch sizes"
-    batch_size = 1
-    grad_accum = 50
-    max_emb_size = 2000
-    optimizer_name = "adam"
-    lr = 0.001
+    print("Using", device)
+    wandb_note = "test if arguments and loading model and testing works"
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bs", type=int, default=8)
+    parser.add_argument("--grac", type=int, default=10)
+    parser.add_argument("--maxemb", type=int, default=400)
+    parser.add_argument("--optim", type=str, default="adamax")
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=4)
+    parser.add_argument("--model_type", type=str, default="pt5-cnn")
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--trainset", type=str, default="new_pisces_200.jsonl")
+    parser.add_argument("--valset", type=str, default="casp12_200.jsonl")
+    args = parser.parse_args()
+    
+    batch_size = args.bs
+    grad_accum = args.grac
+    max_emb_size = args.maxemb
+    optimizer_name = args.optim
+    lr = args.lr
     loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
-    epochs = 4
-    model_type = "pt5-cnn"
-    dropout = 0.25
-    seed = 42
+    epochs = args.epochs
+    model_type = args.model_type
+    dropout = args.dropout
+    seed = args.seed
+    trainset = args.trainset
+    valset = args.valset
 
 
     ## Data loading
     drive_path = "/home/ubuntu/instance1/data/"
-    train_path = drive_path + "train.jsonl"
-    val_path = drive_path + "val.jsonl"
+    train_path = drive_path + trainset
+    val_path = drive_path + valset
 
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
@@ -345,18 +378,18 @@ if __name__ == "__main__":
                                   max_emb_size=max_emb_size)
 
     val_loader = get_dataloader(jsonl_path=val_path, 
-                                batch_size=batch_size, 
+                                batch_size=1, 
                                 device=device, seed=42,
-                                max_emb_size=max_emb_size)
+                                max_emb_size=2000)
 
     # Test loader
-    casp12_path = drive_path + "casp12_300.jsonl"
-    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=batch_size, device=device, seed=seed,
-                                 max_emb_size=max_emb_size)
+    casp12_path = drive_path + "casp12.jsonl"
+    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
+                                 max_emb_size=5000)
 
-    npis_path = drive_path + "new_pisces_300.jsonl"
-    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=batch_size, device=device, seed=seed,
-                                 max_emb_size=max_emb_size)
+    npis_path = drive_path + "new_pisces.jsonl"
+    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
+                                 max_emb_size=5000)
 
     # Chose model
     if model_type == "pt5-cnn":
@@ -374,13 +407,14 @@ if __name__ == "__main__":
     config = {"lr": str(lr).replace("0.", ""),
               "epochs": epochs,
               "batch_size": batch_size,
+              "max_emb_size": max_emb_size,
               "grad_accum": grad_accum,
               "optim_name": optimizer_name,
               "model_type": model_type,
               "loss_fn": loss_fn,
               "dropout": dropout,
-              "train_path": train_path,
-              "val_path": val_path,
+              "trainset": trainset,
+              "valset": valset,
               "casp12_path": casp12_path,
               "npis_path": npis_path,
               "train_size": len(train_data),
@@ -404,3 +438,12 @@ if __name__ == "__main__":
                         loss_fn=loss_fn)
     
     ## Test data (TODO)
+                        
+    ## Load model
+    model = T5CNN()
+    model.load_state_dict(torch.load("model.pt"))
+    model = model.to(device)
+    print("new_pisces:", test(model, npis_loader, verbose=False))
+    print("casp12:", test(model, casp12_loader, verbose=True))
+    
+    
