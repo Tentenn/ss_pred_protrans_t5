@@ -26,6 +26,8 @@ import utils
 from Dataset import SequenceDataset
 from T5ConvNet import T5CNN
 from smart_optim import Adamax
+from transformers import Adafactor
+
 
 """
 This code trains the CNN for 3-State secondary structure prediction
@@ -109,6 +111,8 @@ def main_training_loop(model: torch.nn.Module,
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     elif optimizer_name == "adamax":
       optimizer = Adamax(model.parameters(), lr=lr)
+    elif optimizer_name == "adafactor":
+      optimizer = Adafactor(model.parameters(), lr=lr, relative_step=False, scale_parameter=False)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
@@ -337,7 +341,7 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print("Using", device)
-    wandb_note = "test if arguments and loading model and testing works"
+    
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--bs", type=int, default=8)
@@ -351,6 +355,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--trainset", type=str, default="new_pisces_200.jsonl")
     parser.add_argument("--valset", type=str, default="casp12_200.jsonl")
+    parser.add_argument("--wdnote", type=str)
+    parser.add_argument("--trainable", type=int, default=None)
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -365,6 +371,8 @@ if __name__ == "__main__":
     seed = args.seed
     trainset = args.trainset
     valset = args.valset
+    wandb_note = args.wdnote
+    trainable = args.trainable
 
 
     ## Data loading
@@ -391,13 +399,29 @@ if __name__ == "__main__":
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
                                  max_emb_size=5000)
 
-    # Chose model
+    # Choose model
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
     elif model_type == "pbert-cnn":
       model = ProtBertCNN(dropout=dropout).to(device)
     else:
       assert False, f"Model type not implemented {model_type}"
+    
+    # Apply freezing
+    if args.trainable:
+        num_trainable_layers = args.trainable
+        trainable_t5_layers_stage1 = [str(integer) for integer in
+                                      list(range(23, 23 - num_trainable_layers, -1))]
+
+        print("Entering model freezing")
+        for layer, param in model.named_parameters():
+            # print(layer)
+            param.requires_grad = False
+        print("all layers frozen. Unfreezing trainable layers")
+        for layer, param in model.named_parameters():
+            if any(trainable in layer for trainable in trainable_t5_layers_stage1):
+                param.requires_grad = True
+                print("unfroze", layer)
 
     # For testing and logging
     train_data = train_loader
@@ -419,7 +443,8 @@ if __name__ == "__main__":
               "npis_path": npis_path,
               "train_size": len(train_data),
               "val_size": len(val_data),
-              "wandb_note": wandb_note
+              "wandb_note": wandb_note,
+              "number of trainable layers (freezing)": trainable,
               }
     experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
     wandb.init(project="t5cnn-ft", entity="kyttang", config=config, name=experiment_name)
