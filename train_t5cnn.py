@@ -195,6 +195,7 @@ def validate(model: torch.nn.Module,
     last_accuracy = 0
     total_loss = 0
     count = 0
+    sum_accuracy = 0
     for i, batch in enumerate(val_data):
 
       ids, label, mask = batch
@@ -206,18 +207,13 @@ def validate(model: torch.nn.Module,
       with torch.no_grad():
         out = model(ids)
 
-
       # reshape to make loss work 
       out_f = torch.transpose(out, 1, 2)
 
       # calculate loss
-
       loss = loss_fn(out_f, labels_f)
       total_loss += loss
-      count += 1
-      # wandb.log({"val_loss":loss.item()})
-
-      acc_scores = []
+      
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
@@ -228,11 +224,12 @@ def validate(model: torch.nn.Module,
         res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
         assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
+        count += 1
         
         acc = q3_acc(true_label, preds, res_mask)
-        acc_scores.append(acc)
-      last_accuracy = sum(acc_scores)/len(acc_scores)# , np.std(acc_scores)
-
+        sum_accuracy += acc
+    last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
+    print("len acc scores: ", count, f"should be ({len(val_data)})")
     return last_accuracy, total_loss/count
 
 def test(model: torch.nn.Module,
@@ -418,10 +415,13 @@ if __name__ == "__main__":
             # print(layer)
             param.requires_grad = False
         print("all layers frozen. Unfreezing trainable layers")
+        unfr_c = 0
         for layer, param in model.named_parameters():
             if any(trainable in layer for trainable in trainable_t5_layers_stage1):
                 param.requires_grad = True
-                print("unfroze", layer)
+                unfr_c += 1
+                # print("unfroze", layer)
+        print(f"unfroze {unfr_c} layers")
 
     # For testing and logging
     train_data = train_loader
