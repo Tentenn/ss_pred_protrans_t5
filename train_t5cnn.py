@@ -25,6 +25,7 @@ import argparse
 import utils
 from Dataset import SequenceDataset
 from T5ConvNet import T5CNN
+from T5Linear import T5Linear
 from smart_optim import Adamax
 from transformers import Adafactor
 
@@ -113,6 +114,8 @@ def main_training_loop(model: torch.nn.Module,
       optimizer = Adamax(model.parameters(), lr=lr)
     elif optimizer_name == "adafactor":
       optimizer = Adafactor(model.parameters(), lr=lr, relative_step=False, scale_parameter=False)
+    elif optimizer_name == "adafactor_nolr":
+      optimizer = Adafactor(model.parameters(), relative_step=False, scale_parameter=False)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
@@ -401,6 +404,8 @@ if __name__ == "__main__":
       model = T5CNN().to(device)
     elif model_type == "pbert-cnn":
       model = ProtBertCNN(dropout=dropout).to(device)
+    elif model_type == "pt5-lin":
+      model = T5Linear(dropout=dropout).to(device)
     else:
       assert False, f"Model type not implemented {model_type}"
     
@@ -447,7 +452,7 @@ if __name__ == "__main__":
               "number of trainable layers (freezing)": trainable,
               }
     experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
-    wandb.init(project="t5cnn-ft", entity="kyttang", config=config, name=experiment_name)
+    wandb.init(project="prott5-finetune", entity="kyttang", config=config, name=experiment_name)
 
     # start training
     gc.collect()
@@ -462,10 +467,17 @@ if __name__ == "__main__":
                         optimizer_name=optimizer_name,
                         loss_fn=loss_fn)
     
-    ## Test data (TODO)
-                        
+    ## Test data        
     ## Load model
-    model = T5CNN()
+    if model_type == "pt5-cnn":
+      model = T5CNN().to(device)
+    elif model_type == "pbert-cnn":
+      model = ProtBertCNN(dropout=dropout).to(device)
+    elif model_type == "pt5-lin":
+      model = T5Linear(dropout=dropout).to(device)
+    else:
+      assert False, f"Model type not implemented {model_type}"
+    
     model.load_state_dict(torch.load("model.pt"))
     model = model.to(device)
     print("new_pisces:", test(model, npis_loader, verbose=False))
