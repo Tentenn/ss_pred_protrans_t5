@@ -376,7 +376,8 @@ if __name__ == "__main__":
 
 
     ## Data loading
-    drive_path = "/home/ubuntu/instance1/data/"
+    # drive_path = "/home/ubuntu/instance1/data/"
+    drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
     train_path = drive_path + trainset
     val_path = drive_path + valset
 
@@ -452,7 +453,7 @@ if __name__ == "__main__":
               "number of trainable layers (freezing)": trainable,
               }
     experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
-    wandb.init(project="prott5-finetune", entity="kyttang", config=config, name=experiment_name)
+    wandb.init(project="runtesting", entity="kyttang", config=config, name=experiment_name)
 
     # start training
     gc.collect()

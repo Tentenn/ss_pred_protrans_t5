@@ -8,15 +8,15 @@ import torch
 
 class T5Linear(torch.nn.Module):
     def __init__(self, dropout=0.25):
-        super(T5CNN, self).__init__()
+        super(T5Linear, self).__init__()
 
         self.t5 = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
 
         self.linear = torch.nn.Sequential(
-            torch.nn.Dropout(dropout),
-            torch.nn.Linear(1024, 512)
+            # torch.nn.Dropout(dropout),
+            torch.nn.Linear(1024, 512),
             torch.nn.LeakyReLU(),
-            torch.nn.Linear(1024, 3)
+            torch.nn.Linear(512, 3)
         )
 
     def forward(self, input_ids):
@@ -28,7 +28,9 @@ class T5Linear(torch.nn.Module):
         emb = self.t5(input_ids).last_hidden_state
 
         # old architecture
-        emb = emb.permute(0, 2, 1).unsqueeze(dim=-1)
+        # print("embsize", emb.size())
+        # emb = emb.permute(0, 2, 1).unsqueeze(dim=-1)
+        # print("embsize", emb.size())
         d3_Yhat = self.linear(emb)  # OUT: (B x 32 x L x 1)
         # d3_Yhat = self.dssp3_classifier(emb).squeeze(dim=-1).permute(0, 2, 1)  # OUT: (B x L x 3)
         # d3_Yhat = self.one_linear(emb)
