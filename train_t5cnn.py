@@ -35,19 +35,14 @@ This code trains the CNN for 3-State secondary structure prediction
 Using ProtTrans T5 per residue embeddings.
 """
 
-def process_labels(labels: list, mask:list, onehot=True):
+def process_labels(labels: list, mask:list, onehot=False):
   """
-  turns a list of labels ['HEECCC', 'HHHEEEECCC'] to one hot encoded tensor
-  and add padding e.g torch.tensor([[1, 0, 0], [0, 0, 1], [0, 0, 0]])
+  turns a list of labels ['HEECCC', 'HHHEEEECCC'] labels and adds padding
   """
-
   max_len = len(max(labels, key=len)) # determine longest sequence in list
   processed = []
   if onehot:
-    class_mapping = {"H":[1, 0, 0], "E":[0, 1, 0], "L":[0, 0, 1], "C":[0, 0, 1]}
-    processed = [[class_mapping[c] for c in label] for label in labels]
-    # add padding manually using [0, 0, 0]
-    processed = [list(pad(subl, max_len, [0, 0, 0])) for subl in processed]
+    assert False, "legacy error"
   else:
     class_mapping = {"H":0, "E":1, "L":2, "C":2}
     processed = [[class_mapping[c] for c in label] for label in labels]
@@ -104,6 +99,8 @@ def main_training_loop(model: torch.nn.Module,
       optimizer = Adafactor(model.parameters())
     elif optimizer_name == "adagrad":
       optimizer = torch.optim.Adagrad(model.parameters(), lr=lr)
+    elif optimizer_name == "rmsprop":
+      optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
@@ -131,7 +128,7 @@ def main_training_loop(model: torch.nn.Module,
         best_vloss = v_loss
       else:
         epochs_without_improvement += 1
-        print("Epochs without improvement: {epochs_without_improvement}")
+        print(f"Epochs without improvement: {epochs_without_improvement}")
         if epochs_without_improvement >= 2:
             print("max amount of epochs without improvement reached. Stopping training...")
             break
@@ -201,7 +198,6 @@ def validate(model: torch.nn.Module,
     count = 0
     sum_accuracy = 0
     for i, batch in enumerate(val_data):
-
       ids, label, mask = batch
 
       labels_f = process_labels(label, mask=mask, onehot=False).to(device)
@@ -233,7 +229,7 @@ def validate(model: torch.nn.Module,
         acc = q3_acc(true_label, preds, res_mask)
         sum_accuracy += acc
     last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
-    print("len acc scores: ", count, f"should be ({len(val_data)})")
+    # print("len acc scores: ", count, f"should be ({len(val_data)})")
     return last_accuracy, total_loss/count
 
 def test(model: torch.nn.Module,
@@ -376,6 +372,7 @@ if __name__ == "__main__":
     valset = args.valset
     wandb_note = args.wdnote
     trainable = args.trainable
+    project_name = args.pn
 
 
     ## Data loading
@@ -485,6 +482,6 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load("model.pt"))
     model = model.to(device)
     print("new_pisces:", test(model, npis_loader, verbose=False))
-    print("casp12:", test(model, casp12_loader, verbose=True))
+    print("casp12:", test(model, casp12_loader, verbose=False))
     
     
