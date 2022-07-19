@@ -108,7 +108,7 @@ def main_training_loop(model: torch.nn.Module,
     # best_loss = float('-inf')
     
     epochs_without_improvement = 0
-    best_vloss = 0
+    best_vloss = 10000
 
     for epoch in range(epochs):
       # train model and save train loss
@@ -124,7 +124,7 @@ def main_training_loop(model: torch.nn.Module,
       print("acc:", q3_accuracy)
     
       # update best vloss
-      if v_loss > best_vloss:
+      if v_loss < best_vloss: # smaller is better
         best_vloss = v_loss
       else:
         epochs_without_improvement += 1
