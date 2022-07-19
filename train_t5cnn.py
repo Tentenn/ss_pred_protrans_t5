@@ -83,20 +83,6 @@ def pad_infinite(iterable, padding=None):
 def pad(iterable, size, padding=None):
    return islice(pad_infinite(iterable, padding), size)
 
-def process_label(labels: list):
-  """
-  turns a list of labels ['HEECCC', 'HHHEEEECCC'] to one hot encoded tensor
-  and add padding e.g torch.tensor([[1, 0, 0], [0, 0, 1], [0, 0, 0]])
-  """
-
-  max_len = len(max(labels, key=len))
-  class_mapping = {"H":[1, 0, 0], "E":[0, 1, 0], "L":[0, 0, 1], "C":[0, 0, 1]}
-  processed = [[class_mapping[c] for c in label] for label in labels]
-  # add padding manually using [0, 0, 0]
-  padded = [list(pad(subl, max_len, [0, 0, 0])) for subl in processed]
-  return torch.tensor(np.array(padded), dtype=torch.float)
-
-
 def main_training_loop(model: torch.nn.Module, 
                        train_data: DataLoader, 
                        val_data: DataLoader,
@@ -114,13 +100,18 @@ def main_training_loop(model: torch.nn.Module,
       optimizer = Adamax(model.parameters(), lr=lr)
     elif optimizer_name == "adafactor":
       optimizer = Adafactor(model.parameters(), lr=lr, relative_step=False, scale_parameter=False)
-    elif optimizer_name == "adafactor_nolr":
-      optimizer = Adafactor(model.parameters(), relative_step=False, scale_parameter=False)
+    elif optimizer_name == "adafactor_rs":
+      optimizer = Adafactor(model.parameters())
+    elif optimizer_name == "adagrad":
+      optimizer = torch.optim.Adagrad(model.parameters(), lr=lr)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
     # track best scores
     best_accuracy = float('-inf')
     # best_loss = float('-inf')
+    
+    epochs_without_improvement = 0
+    best_vloss = 0
 
     for epoch in range(epochs):
       # train model and save train loss
@@ -134,6 +125,16 @@ def main_training_loop(model: torch.nn.Module,
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
       print("acc:", q3_accuracy)
+    
+      # update best vloss
+      if v_loss > best_vloss:
+        best_vloss = v_loss
+      else:
+        epochs_without_improvement += 1
+        print("Epochs without improvement: {epochs_without_improvement}")
+        if epochs_without_improvement >= 2:
+            print("max amount of epochs without improvement reached. Stopping training...")
+            break
       
       # save model if better
       if q3_accuracy > best_accuracy:
@@ -266,6 +267,7 @@ def test(model: torch.nn.Module,
         acc_scores.append(acc)
 
         if verbose:
+          print(f"mask:\t\t", mask)
           print(f"prediction:\t", preds_to_seq(preds))
           print(f"true label:\t", label[batch_idx])
           print("accuracy:\t", acc)
@@ -357,6 +359,7 @@ if __name__ == "__main__":
     parser.add_argument("--valset", type=str, default="casp12_200.jsonl")
     parser.add_argument("--wdnote", type=str)
     parser.add_argument("--trainable", type=int, default=None)
+    parser.add_argument("--pn", type=str, default="runtesting")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -376,8 +379,8 @@ if __name__ == "__main__":
 
 
     ## Data loading
-    # drive_path = "/home/ubuntu/instance1/data/"
-    drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
+    drive_path = "/home/ubuntu/instance1/data/"
+    # drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
     train_path = drive_path + trainset
     val_path = drive_path + valset
 
@@ -452,8 +455,8 @@ if __name__ == "__main__":
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }
-    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}"
-    wandb.init(project="runtesting", entity="kyttang", config=config, name=experiment_name)
+    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}_{max_emb_size}_{wandb_note}"
+    wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
     # start training
     gc.collect()
