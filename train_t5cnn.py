@@ -126,6 +126,7 @@ def main_training_loop(model: torch.nn.Module,
       # update best vloss
       if v_loss < best_vloss: # smaller is better
         best_vloss = v_loss
+        epochs_without_improvement = 0
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
@@ -427,6 +428,10 @@ if __name__ == "__main__":
                 param.requires_grad = True
                 unfr_c += 1
                 # print("unfroze", layer)
+            if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer:
+                  param.requires_grad = True
+                  unfr_c += 1
+                  print("unfroze", layer)
         print(f"unfroze {unfr_c} layers")
 
     # For testing and logging
