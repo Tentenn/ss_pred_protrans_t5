@@ -86,6 +86,7 @@ def main_training_loop(model: torch.nn.Module,
                        epochs: int,
                        grad_accum: int,
                        optimizer_name: str,
+                       weight_decay: float,
                        loss_fn,
                        device):
     
@@ -94,9 +95,9 @@ def main_training_loop(model: torch.nn.Module,
     elif optimizer_name == "adamax":
       optimizer = Adamax(model.parameters(), lr=lr)
     elif optimizer_name == "adafactor":
-      optimizer = Adafactor(model.parameters(), lr=lr, relative_step=False, scale_parameter=False)
+      optimizer = Adafactor(model.parameters(), lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
     elif optimizer_name == "adafactor_rs":
-      optimizer = Adafactor(model.parameters())
+      optimizer = Adafactor(model.parameters(), weight_decay=weight_decay)
     elif optimizer_name == "adagrad":
       optimizer = torch.optim.Adagrad(model.parameters(), lr=lr)
     elif optimizer_name == "rmsprop":
@@ -357,6 +358,7 @@ if __name__ == "__main__":
     parser.add_argument("--wdnote", type=str)
     parser.add_argument("--trainable", type=int, default=None)
     parser.add_argument("--pn", type=str, default="runtesting")
+    parser.add_argument("--wd", type=float, default=0.01)
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -374,6 +376,7 @@ if __name__ == "__main__":
     wandb_note = args.wdnote
     trainable = args.trainable
     project_name = args.pn
+    weight_decay = args.wd
 
 
     ## Data loading
@@ -471,7 +474,8 @@ if __name__ == "__main__":
                         epochs=epochs,
                         grad_accum=grad_accum,
                         optimizer_name=optimizer_name,
-                        loss_fn=loss_fn)
+                        loss_fn=loss_fn,
+                        weight_decay=weight_decay)
     
     ## Test data        
     ## Load model
