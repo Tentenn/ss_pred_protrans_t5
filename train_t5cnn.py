@@ -160,7 +160,7 @@ def train(model: torch.nn.Module,
     """
     gc.collect()
     model.train()
-    # optimizer.zero_grad()
+    optimizer.zero_grad()
     total_loss = 0
     count = 0
     # batch accumulation parameter
