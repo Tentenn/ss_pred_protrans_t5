@@ -42,9 +42,11 @@ class SequenceDataset(Dataset):
 
     def __init__(self, jsonl_path: str,
                  device: torch.device,
-                 max_emb_size=200):
-        self.tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+                 max_emb_size=200,
+                tokenizer=None):
+        # self.tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
         # self.tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
+        self.tokenizer = tokenizer
         self.device = device
         self.max_emb_size = max_emb_size
         self.data_dict = utils.load_all_data(jsonl_path)

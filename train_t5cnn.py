@@ -110,6 +110,12 @@ def main_training_loop(model: torch.nn.Module,
     
     epochs_without_improvement = 0
     best_vloss = 10000
+    
+    # validate results and calculate scores
+    print(f"validate start epoch")
+    q3_accuracy, v_loss = validate(model, val_data, loss_fn)
+    wandb.log({"accuracy (Q3)":q3_accuracy})
+    wandb.log({"val_loss":v_loss})
 
     for epoch in range(epochs):
       # train model and save train loss
@@ -329,11 +335,12 @@ def seq_collate(data):
 
 
 def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
-                   seed: int, max_emb_size: int) -> DataLoader:
+                   seed: int, max_emb_size: int, tokenizer=None) -> DataLoader:
     torch.manual_seed(seed)
     dataset = SequenceDataset(jsonl_path=jsonl_path,
                            device=device,
-                           max_emb_size=max_emb_size)
+                           max_emb_size=max_emb_size,
+                             tokenizer=tokenizer)
     loader = DataLoader(dataset, batch_size=batch_size, 
                         shuffle=True, collate_fn=custom_collate)
     return loader
@@ -379,6 +386,19 @@ if __name__ == "__main__":
     weight_decay = args.wd
 
 
+    # Choose model
+    if model_type == "pt5-cnn":
+      model = T5CNN().to(device)
+      tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+    elif model_type == "pbert-cnn":
+      model = ProtBertCNN(dropout=dropout).to(device)
+      tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
+    elif model_type == "pt5-lin":
+      model = T5Linear(dropout=dropout).to(device)
+      tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+    else:
+      assert False, f"Model type not implemented {model_type}"
+    
     ## Data loading
     drive_path = "/home/ubuntu/instance1/data/"
     # drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
@@ -388,31 +408,23 @@ if __name__ == "__main__":
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
                                   device=device, seed=42,
-                                  max_emb_size=max_emb_size)
+                                  max_emb_size=max_emb_size, tokenizer=tokenizer)
 
     val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
                                 device=device, seed=42,
-                                max_emb_size=2000)
+                                max_emb_size=2000, tokenizer=tokenizer)
 
     # Test loader
     casp12_path = drive_path + "casp12.jsonl"
     casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000)
+                                 max_emb_size=5000, tokenizer=tokenizer)
 
     npis_path = drive_path + "new_pisces.jsonl"
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000)
+                                 max_emb_size=5000, tokenizer=tokenizer)
 
-    # Choose model
-    if model_type == "pt5-cnn":
-      model = T5CNN().to(device)
-    elif model_type == "pbert-cnn":
-      model = ProtBertCNN(dropout=dropout).to(device)
-    elif model_type == "pt5-lin":
-      model = T5Linear(dropout=dropout).to(device)
-    else:
-      assert False, f"Model type not implemented {model_type}"
+    
     
     # Apply freezing
     if args.trainable:

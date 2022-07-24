@@ -10,7 +10,7 @@ class T5CNN(torch.nn.Module):
     def __init__(self, dropout=0.25):
         super(T5CNN, self).__init__()
 
-        self.t5 = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+        self.t5 = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")# , torch_dtype=torch.float1)
 
         self.elmo_feature_extractor = torch.nn.Sequential(
             torch.nn.Conv2d(1024, 32, kernel_size=(7, 1), padding=(3, 0)),  # 7x32
