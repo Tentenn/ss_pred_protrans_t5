@@ -154,7 +154,7 @@ def main_training_loop(model: torch.nn.Module,
       
       # freezes t5 language model
       if epoch == freeze_epoch:
-        freeze_model(model)
+        freeze_t5_model(model)
 
 
 def train(model: torch.nn.Module,
@@ -344,19 +344,14 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
                         shuffle=True, collate_fn=custom_collate)
     return loader
 
-def freeze_model(model):
-    print("Entering model freezing")
+def freeze_t5_model(model):
+    ## Freezes the t5 component of the t5 model
+    print("freezing all but cnn")
     for layer, param in model.named_parameters():
-        # print(layer)
         param.requires_grad = False
-    print("all layers frozen. Unfreezing trainable layers")
-    unfr_c = 0
-    for layer, param in model.named_parameters():
-        if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer:
-              param.requires_grad = True
-              unfr_c += 1
-              print("unfroze", layer)
-    print(f"unfroze {unfr_c} layers")
+    # unfreeze CNN
+    for layer, param in list(model.named_parameters())[-4:]:
+        param.requires_grad = True
 
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -439,30 +434,32 @@ if __name__ == "__main__":
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
                                  max_emb_size=5000, tokenizer=tokenizer)
 
-    
-    
     # Apply freezing
-    if args.trainable:
+    assert args.trainable != 0, "False input for trinable: use -1, or n>0"
+    if args.trainable == -1: ## -1 to freeze whole t5 model
+        print("freeze all layers")
+        freeze_model(model)
+    elif args.trainable > 0:
         num_trainable_layers = args.trainable
         trainable_t5_layers_stage1 = [str(integer) for integer in
                                       list(range(23, 23 - num_trainable_layers, -1))]
-
         print("Entering model freezing")
-        for layer, param in model.named_parameters():
-            # print(layer)
+        for layer, param in m1.named_parameters():
             param.requires_grad = False
         print("all layers frozen. Unfreezing trainable layers")
         unfr_c = 0
-        for layer, param in model.named_parameters():
-            if any(trainable in layer for trainable in trainable_t5_layers_stage1):
+
+        # unfreeze desired layers
+        for layer, param in m1.named_parameters():
+            lea = [trainable in layer for trainable in trainable_t5_layers_stage1]
+            if sum(lea) >= 1:
                 param.requires_grad = True
                 unfr_c += 1
-                print("unfroze", layer)
-            if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer or "t5.shared.weight":
-                  param.requires_grad = True
-                  unfr_c += 1
-                  print("unfroze", layer)
-        print(f"unfroze {unfr_c} layers")
+        # unfreeze CNN
+        for layer, param in list(m1.named_parameters())[-4:]:
+            param.requires_grad = True
+            unfr_c += 1
+
 
     # For testing and logging
     train_data = train_loader
