@@ -438,7 +438,7 @@ if __name__ == "__main__":
     assert args.trainable != 0, "False input for trinable: use -1, or n>0"
     if args.trainable == -1: ## -1 to freeze whole t5 model
         print("freeze all layers")
-        freeze_model(model)
+        freeze_t5_model(model)
     elif args.trainable > 0:
         num_trainable_layers = args.trainable
         trainable_t5_layers_stage1 = [str(integer) for integer in
