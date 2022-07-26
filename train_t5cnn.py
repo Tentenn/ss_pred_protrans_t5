@@ -88,6 +88,7 @@ def main_training_loop(model: torch.nn.Module,
                        optimizer_name: str,
                        weight_decay: float,
                        loss_fn,
+                       freeze_epoch: int,
                        device):
     
     if optimizer_name == "adam":
@@ -111,13 +112,9 @@ def main_training_loop(model: torch.nn.Module,
     epochs_without_improvement = 0
     best_vloss = 10000
     
-    # validate results and calculate scores
-    print(f"validate start epoch")
-    q3_accuracy, v_loss = validate(model, val_data, loss_fn)
-    wandb.log({"accuracy (Q3)":q3_accuracy})
-    wandb.log({"val_loss":v_loss})
-
     for epoch in range(epochs):
+      
+      
       # train model and save train loss
       print(f"train epoch {epoch}")
       t_loss = train(model, train_data, loss_fn, optimizer, grad_accum)
@@ -154,6 +151,10 @@ def main_training_loop(model: torch.nn.Module,
         #             'loss': t_loss,
         #             }, PATH)
         torch.save(model.state_dict(), PATH)
+      
+      # freezes t5 language model
+      if epoch == freeze_epoch:
+        freeze_model(model)
 
 
 def train(model: torch.nn.Module,
@@ -164,7 +165,6 @@ def train(model: torch.nn.Module,
     """
     do a train on a minibatch
     """
-    gc.collect()
     model.train()
     optimizer.zero_grad()
     total_loss = 0
@@ -172,28 +172,27 @@ def train(model: torch.nn.Module,
     # batch accumulation parameter
     accum_iter = grad_accum
     for i, batch in enumerate(train_data):
+        optimizer.zero_grad()
         # print(f"batch-{i}")
         ids, label, mask = batch
         ids = ids.to(device)
         mask = mask.to(device)
         # passes and weights update
-        with torch.set_grad_enabled(True):
-          out = model(ids) # shape: [bs, max_seq_len, 3]
-          # string to float conversion, padding and mask labels
-          labels = process_labels(label, mask=mask, onehot=False).to(device)
-          # reshape to make loss work 
-          out = torch.transpose(out, 1, 2)
-          assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
-          loss = loss_fn(out, labels)
-          loss.backward()
-          total_loss += loss.item()
-          count += 1
-          wandb.log({"train_loss":loss.item()}) # logs loss for each batch
+        out = model(ids) # shape: [bs, max_seq_len, 3]
+        # string to float conversion, padding and mask labels
+        labels = process_labels(label, mask=mask, onehot=False).to(device)
+        # reshape to make loss work 
+        out = torch.transpose(out, 1, 2)
+        assert out.shape[-1] == labels.shape[-1], f"out: {out.shape}, labels: {labels.shape}"
+        loss = loss_fn(out, labels)
+        loss.backward()
+        total_loss += loss.item()
+        count += 1
+        wandb.log({"train_loss":loss.item()}) # logs loss for each batch
 
-          # weights update
-          if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
-            optimizer.step()
-            optimizer.zero_grad()
+          # # weights update
+          # if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
+        optimizer.step()
     return total_loss/count
 
 def validate(model: torch.nn.Module,
@@ -345,6 +344,20 @@ def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
                         shuffle=True, collate_fn=custom_collate)
     return loader
 
+def freeze_model(model):
+    print("Entering model freezing")
+    for layer, param in model.named_parameters():
+        # print(layer)
+        param.requires_grad = False
+    print("all layers frozen. Unfreezing trainable layers")
+    unfr_c = 0
+    for layer, param in model.named_parameters():
+        if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer:
+              param.requires_grad = True
+              unfr_c += 1
+              print("unfroze", layer)
+    print(f"unfroze {unfr_c} layers")
+
 if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print("Using", device)
@@ -366,6 +379,7 @@ if __name__ == "__main__":
     parser.add_argument("--trainable", type=int, default=None)
     parser.add_argument("--pn", type=str, default="runtesting")
     parser.add_argument("--wd", type=float, default=0.01)
+    parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=1)
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -384,6 +398,7 @@ if __name__ == "__main__":
     trainable = args.trainable
     project_name = args.pn
     weight_decay = args.wd
+    freeze_epoch = args.fr
 
 
     # Choose model
@@ -442,8 +457,8 @@ if __name__ == "__main__":
             if any(trainable in layer for trainable in trainable_t5_layers_stage1):
                 param.requires_grad = True
                 unfr_c += 1
-                # print("unfroze", layer)
-            if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer:
+                print("unfroze", layer)
+            if "dssp3" in layer or "elmo_feature" in layer or "final_layer_norm" in layer or "t5.shared.weight":
                   param.requires_grad = True
                   unfr_c += 1
                   print("unfroze", layer)
@@ -487,7 +502,8 @@ if __name__ == "__main__":
                         grad_accum=grad_accum,
                         optimizer_name=optimizer_name,
                         loss_fn=loss_fn,
-                        weight_decay=weight_decay)
+                        weight_decay=weight_decay,
+                        freeze_epoch=freeze_epoch)
     
     ## Test data        
     ## Load model
