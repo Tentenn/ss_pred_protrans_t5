@@ -444,21 +444,23 @@ if __name__ == "__main__":
         trainable_t5_layers_stage1 = [str(integer) for integer in
                                       list(range(23, 23 - num_trainable_layers, -1))]
         print("Entering model freezing")
-        for layer, param in m1.named_parameters():
+        for layer, param in model.named_parameters():
             param.requires_grad = False
         print("all layers frozen. Unfreezing trainable layers")
         unfr_c = 0
 
         # unfreeze desired layers
-        for layer, param in m1.named_parameters():
+        for layer, param in model.named_parameters():
             lea = [trainable in layer for trainable in trainable_t5_layers_stage1]
             if sum(lea) >= 1:
                 param.requires_grad = True
                 unfr_c += 1
+                print(f"unfroze {layer}")
         # unfreeze CNN
-        for layer, param in list(m1.named_parameters())[-4:]:
+        for layer, param in list(model.named_parameters())[-4:]:
             param.requires_grad = True
             unfr_c += 1
+            print(f"unfroze {layer}")
 
 
     # For testing and logging
