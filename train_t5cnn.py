@@ -374,7 +374,7 @@ if __name__ == "__main__":
     parser.add_argument("--trainable", type=int, default=None)
     parser.add_argument("--pn", type=str, default="runtesting")
     parser.add_argument("--wd", type=float, default=0.01)
-    parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=1)
+    parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
     args = parser.parse_args()
     
     batch_size = args.bs

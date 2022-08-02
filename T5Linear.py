@@ -21,11 +21,13 @@ class T5Linear(torch.nn.Module):
 
     def forward(self, input_ids):
         # trim ids (last item of each seq)
-        input_ids = input_ids[:,:-1]
+        # input_ids = input_ids[:,:-1]
         # assert input_ids.shape == attention_mask.shape, f"input_ids: {input_ids.shape}, mask: {attention_mask.shape}"
         
         # create embeddings
         emb = self.t5(input_ids).last_hidden_state
+        
+        emb = emb[:, :-1, :]
 
         # old architecture
         # print("embsize", emb.size())
