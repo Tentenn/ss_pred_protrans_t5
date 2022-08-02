@@ -66,7 +66,8 @@ class SequenceDataset(Dataset):
         # Preprocess sequence to ProtTrans format
         sequence = " ".join(sequence)
         prepro = re.sub(r"[UZOB]", "X", sequence)
-        ids = self.tokenizer.encode(prepro)
+        ids = self.tokenizer.encode(prepro, add_special_tokens=True)
+        # print(ids[:5], "...",ids[-5:], print(ids.size))
         
         assert len(label) == len(mask), "label and mask Not the same length (__getitem__)"
         return ids, label, mask

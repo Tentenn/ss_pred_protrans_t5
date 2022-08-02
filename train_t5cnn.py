@@ -5,7 +5,7 @@ from typing import Any
 import json
 from torch.utils.data import DataLoader, Dataset
 import torch
-from transformers import T5EncoderModel, T5Tokenizer
+from transformers import T5EncoderModel, T5Tokenizer, BertTokenizer
 from pathlib import Path
 from pyfaidx import Fasta
 from typing import Dict, Tuple, List
@@ -28,6 +28,7 @@ from T5ConvNet import T5CNN
 from T5Linear import T5Linear
 from smart_optim import Adamax
 from transformers import Adafactor
+from BertLinear import BertLinear
 
 
 """
@@ -405,7 +406,10 @@ if __name__ == "__main__":
       tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
     elif model_type == "pt5-lin":
       model = T5Linear(dropout=dropout).to(device)
-      tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+      tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc", torch_dtype=torch.float16)
+    elif model_type == "pbert-lin":
+      model = BertLinear(dropout=dropout).to(device)
+      tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
     else:
       assert False, f"Model type not implemented {model_type}"
     
@@ -462,7 +466,6 @@ if __name__ == "__main__":
             unfr_c += 1
             print(f"unfroze {layer}")
 
-
     # For testing and logging
     train_data = train_loader
     val_data = val_loader
@@ -512,6 +515,8 @@ if __name__ == "__main__":
       model = ProtBertCNN(dropout=dropout).to(device)
     elif model_type == "pt5-lin":
       model = T5Linear(dropout=dropout).to(device)
+    elif model_type == "pbert-lin":
+      model = BertLinear(dropout=dropout).to(device)
     else:
       assert False, f"Model type not implemented {model_type}"
     
