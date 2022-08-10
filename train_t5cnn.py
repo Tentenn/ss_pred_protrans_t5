@@ -36,24 +36,22 @@ This code trains the CNN for 3-State secondary structure prediction
 Using ProtTrans T5 per residue embeddings.
 """
 
+CLASS_MAPPING = {"H":0, "E":1, "L":2, "C":2}
+
 def process_labels(labels: list, mask:list, onehot=False):
   """
   turns a list of labels ['HEECCC', 'HHHEEEECCC'] labels and adds padding
   """
   max_len = len(max(labels, key=len)) # determine longest sequence in list
   processed = []
-  if onehot:
-    assert False, "legacy error"
-  else:
-    class_mapping = {"H":0, "E":1, "L":2, "C":2}
-    processed = [[class_mapping[c] for c in label] for label in labels]
-    # add mask
-    for i,e in enumerate(mask):
-      pel = [-1 if e[j]==0 else p for j,p in enumerate(processed[i])]
-      processed[i] = pel
-    # add padding
-    processed = [list(pad(subl, max_len, -1)) for subl in processed]
-    return torch.tensor(np.array(processed), dtype=torch.long)
+  processed = [[CLASS_MAPPING[c] for c in label] for label in labels]
+  # add mask
+  for i,e in enumerate(mask):
+    pel = [-1 if e[j]==0 else p for j,p in enumerate(processed[i])]
+    processed[i] = pel
+  # add padding
+  processed = [list(pad(subl, max_len, -1)) for subl in processed]
+  return torch.tensor(np.array(processed), dtype=torch.long)
 
 
 def logits_to_preds(logits):
@@ -66,11 +64,7 @@ def logits_to_preds(logits):
   return preds
 
 def label_to_id(labels: str):
-  """
-  'HHEELLL' -> [0, 0, 1, 1, 2, 2, 2]
-  """
-  class_mapping = {"H":0, "E":1, "L":2, "C":2} 
-  converted = [[class_mapping[c] for c in label] for label in labels]
+  converted = [[CLASS_MAPPING[c] for c in label] for label in labels]
   return torch.tensor(converted)
 
 def pad_infinite(iterable, padding=None):
@@ -114,8 +108,6 @@ def main_training_loop(model: torch.nn.Module,
     best_vloss = 10000
     
     for epoch in range(epochs):
-      
-      
       # train model and save train loss
       print(f"train epoch {epoch}")
       t_loss = train(model, train_data, loss_fn, optimizer, grad_accum)
@@ -286,10 +278,6 @@ def preds_to_seq(preds):
 def q3_acc(y_true, y_pred, mask):
   return accuracy_score(y_true, y_pred, sample_weight=[int(e) for e in mask])
 
-def sov(y_true, y_pred):
-  pass
-
-
 def custom_collate(data):
       """
       # https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
@@ -335,12 +323,13 @@ def seq_collate(data):
 
 
 def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
-                   seed: int, max_emb_size: int, tokenizer=None) -> DataLoader:
+                   seed: int, max_emb_size: int, tokenizer=None, masking=0) -> DataLoader:
     torch.manual_seed(seed)
     dataset = SequenceDataset(jsonl_path=jsonl_path,
                            device=device,
                            max_emb_size=max_emb_size,
-                             tokenizer=tokenizer)
+                             tokenizer=tokenizer,
+                             masking=masking)
     loader = DataLoader(dataset, batch_size=batch_size, 
                         shuffle=True, collate_fn=custom_collate)
     return loader
@@ -376,6 +365,8 @@ if __name__ == "__main__":
     parser.add_argument("--pn", type=str, default="runtesting")
     parser.add_argument("--wd", type=float, default=0.01)
     parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
+    parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
+    parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -395,6 +386,8 @@ if __name__ == "__main__":
     project_name = args.pn
     weight_decay = args.wd
     freeze_epoch = args.fr
+    seq_mask = args.msk
+    datapath = args.datapath
 
 
     # Choose model
@@ -414,15 +407,14 @@ if __name__ == "__main__":
       assert False, f"Model type not implemented {model_type}"
     
     ## Data loading
-    drive_path = "/home/ubuntu/instance1/data/"
-    # drive_path = "/content/drive/MyDrive/BachelorThesis/data/"
-    train_path = drive_path + trainset
-    val_path = drive_path + valset
+    train_path = datapath + trainset
+    val_path = datapath + valset
 
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
                                   device=device, seed=42,
-                                  max_emb_size=max_emb_size, tokenizer=tokenizer)
+                                  max_emb_size=max_emb_size, tokenizer=tokenizer,
+                                 masking=seq_mask)
 
     val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
@@ -430,17 +422,16 @@ if __name__ == "__main__":
                                 max_emb_size=2000, tokenizer=tokenizer)
 
     # Test loader
-    casp12_path = drive_path + "casp12.jsonl"
+    casp12_path = datapath + "casp12.jsonl"
     casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
                                  max_emb_size=5000, tokenizer=tokenizer)
 
-    npis_path = drive_path + "new_pisces.jsonl"
+    npis_path = datapath + "new_pisces.jsonl"
     npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
                                  max_emb_size=5000, tokenizer=tokenizer)
 
     # Apply freezing
-    assert args.trainable != 0, "False input for trinable: use -1, or n>0"
-    if args.trainable == -1: ## -1 to freeze whole t5 model
+    if args.trainable <= 0: ## -1 to freeze whole t5 model
         print("freeze all layers")
         freeze_t5_model(model)
     elif args.trainable > 0:
@@ -459,12 +450,12 @@ if __name__ == "__main__":
             if sum(lea) >= 1:
                 param.requires_grad = True
                 unfr_c += 1
-                print(f"unfroze {layer}")
+                # print(f"unfroze {layer}")
         # unfreeze CNN
         for layer, param in list(model.named_parameters())[-4:]:
             param.requires_grad = True
             unfr_c += 1
-            print(f"unfroze {layer}")
+            # print(f"unfroze {layer}")
 
     # For testing and logging
     train_data = train_loader
@@ -486,6 +477,7 @@ if __name__ == "__main__":
               "npis_path": npis_path,
               "train_size": len(train_data),
               "val_size": len(val_data),
+              "sequence_mask": seq_mask,
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }

@@ -43,10 +43,10 @@ class SequenceDataset(Dataset):
     def __init__(self, jsonl_path: str,
                  device: torch.device,
                  max_emb_size=200,
-                tokenizer=None):
-        # self.tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
-        # self.tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
+                tokenizer=None,
+                masking=0):
         self.tokenizer = tokenizer
+        self.masking = masking
         self.device = device
         self.max_emb_size = max_emb_size
         self.data_dict = utils.load_all_data(jsonl_path)
@@ -58,15 +58,21 @@ class SequenceDataset(Dataset):
         # given an index, return ids, label, mask
         header = self.headers[index]
         sequence, label, mask = self.data_dict[header]
-      
         # trim length to max_len
         if len(sequence) > self.max_emb_size:
           sequence, label, mask = self.retr_seg(sequence, label, mask, self.max_emb_size)
-
-        # Preprocess sequence to ProtTrans format
-        sequence = " ".join(sequence)
-        prepro = re.sub(r"[UZOB]", "X", sequence)
-        ids = self.tokenizer.encode(prepro, add_special_tokens=True)
+        
+        
+        prepro = str(re.sub(r"[UZOB]", "X", sequence))
+        # sequence_sliced = " ".join(prepro)
+        # print("TYPE OF SEQUENCE", type(prepro))
+        # print(sequence)
+        if self.masking>0:
+            masked_seq = self.mask_sequence(seq=sequence, d=self.masking) # also adds spaces
+        else:
+            masked_seq = " ".join(prepro)
+        # get ids
+        ids = self.tokenizer.encode(masked_seq, add_special_tokens=True)
         # print(ids[:5], "...",ids[-5:], print(ids.size))
         
         assert len(label) == len(mask), "label and mask Not the same length (__getitem__)"
@@ -82,4 +88,20 @@ class SequenceDataset(Dataset):
         seq_s = seq[start_idx:start_idx+max_len]
         label_s = label[start_idx:start_idx+max_len]
         mask_s = mask[start_idx:start_idx+max_len]
-        return seq_s, label_s, mask_s
+        return str(seq_s), label_s, mask_s
+    
+    def mask_sequence(self, seq, d=0.15):
+        
+      seq_s = [f" {c} " for c in seq]
+      # print("#### seq_s", seq_s)
+      seqlen = len(seq_s)
+      ## create random masking indices based on d
+      indices = sorted(random.sample(range(seqlen), k=int(d*seqlen)))
+      ## replace sequence with '#' token
+      newseq = "".join([" # " if i in indices else f" {seq_s[i]} " for i in range(seqlen)])
+      ## replace '#' with ascending sentinel tokens
+      iter = range(newseq.count("#"))
+      for i, ind in enumerate(indices):
+        seq_s[ind] = f" <extra_id_{iter[i]}> "
+      ## join and remove double spaces
+      return "".join(seq_s).replace("  ", " ").strip() 
