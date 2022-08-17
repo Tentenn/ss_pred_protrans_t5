@@ -462,7 +462,7 @@ if __name__ == "__main__":
     parser.add_argument("--trainset", type=str, default="new_pisces_200.jsonl")
     parser.add_argument("--valset", type=str, default="casp12_200.jsonl")
     parser.add_argument("--wdnote", type=str)
-    parser.add_argument("--trainable", type=int, default=None)
+    parser.add_argument("--trainable", type=int, default=24)
     parser.add_argument("--pn", type=str, default="runtesting")
     parser.add_argument("--wd", type=float, default=0.01)
     parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
@@ -538,7 +538,7 @@ if __name__ == "__main__":
     if args.trainable <= 0: ## -1 to freeze whole t5 model
         print("freeze all layers")
         freeze_t5_model(model)
-    elif args.trainable > 0:
+    elif args.trainable > 0 and args.trainable < 24:
         num_trainable_layers = args.trainable
         trainable_t5_layers_stage1 = [str(integer) for integer in
                                       list(range(23, 23 - num_trainable_layers, -1))]
