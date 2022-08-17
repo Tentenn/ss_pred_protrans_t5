@@ -20,6 +20,8 @@ import wandb
 from datetime import datetime
 import random
 import argparse
+import copy
+import os
 
 import utils
 from Dataset import SequenceDataset
@@ -53,19 +55,23 @@ def process_labels(labels: list, mask:list, onehot=False):
   processed = [list(pad(subl, max_len, -1)) for subl in processed]
   return torch.tensor(np.array(processed), dtype=torch.long)
 
-def _filter_ids(ids):
-    i = 0
-    for ind,e in enumerate(ids):
-      # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
-      if e == 0:
-        ids[ind] = tokenizer.additional_special_tokens_ids[i]
-        i += 1
-    return ids
-def apply_mask(input_ids, noise_mask):
+def _filter_ids(ids_tensor):
+    
+    for ids in ids_tensor:
+        i = 0
+        for ind,e in enumerate(ids):
+          # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
+          if e == 0:
+            ids[ind] = tokenizer.additional_special_tokens_ids[0] ## TODO: Add more special tokens
+            i += 1
+    return ids_tensor
+
+def apply_mask(input_ids, noise_mask, device):
   # Applies noise mask to ids
   # result ["M", "extra_id_0", "C", "C"] <= as ids
-  assert len(np.copy(input_ids)) == len(input_ids), "copy length not the same"
-  masked_input_ids = _filter_ids(np.copy(input_ids)*~noise_mask)
+  assert len(np.copy(input_ids.cpu())) == len(input_ids), "copy length not the same"
+  assert input_ids.shape == noise_mask.shape, f"input_ids: {input_ids} \n noise_mask: {noise_mask}"
+  masked_input_ids = _filter_ids(copy.deepcopy(input_ids).to(device)*~noise_mask)
   # masked_labels_ids = _filter_ids(np.copy(input_ids)*noise_mask)
   # masked_labels_ids[-1] = 1
   # masked_input_ids.append(tokenizer.eos_token_id) # add eos token
@@ -170,7 +176,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     # elif optimizer_name == "adamax":
     #   optimizer = Adamax(model.parameters(), lr=lr)
     elif optimizer_name == "adafactor":
-      optimizer = Adafactor([{"params":lm.parameters()}, {"params":inf_model.parameters()}], 
+      optimizer = Adafactor([{"params":lm.parameters(), 'lr': 0.00001}, {"params":inf_model.parameters(), 'lr': 0.0001}], 
       lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
     # elif optimizer_name == "adafactor_rs":
     #   optimizer = Adafactor(model.parameters(), weight_decay=weight_decay)
@@ -257,11 +263,16 @@ def train(lm: torch.nn.Module,
         # string to float conversion, padding and mask labels
         labels = process_labels(label, mask=mask).to(device)
 
+        # generate span masks and apply to ids
+        noise_mask = torch.tensor([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids]).to(device)
+        assert ids.shape == noise_mask.shape, "shape not the same length"
+        masked_input, masked_labels = apply_mask(ids, noise_mask, device)
+        masked_input = masked_input.to(device)
+        
         # forward pass of whole language model
-        noise_mask = random_spans_noise_mask(len(ids), 0.10, 1)
-        masked_input, masked_labels = apply_mask(ids, noise_mask)
-        masked_input = masked_input.unsqueeze(0)
-        lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids).unsqueeze(0))
+        assert len(ids.shape) == 2, "Shape not right"
+        assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
+        lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
         lm_loss = lm_output.loss
 
         # get embeddings from lm output and pass through inference model
@@ -269,7 +280,13 @@ def train(lm: torch.nn.Module,
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
         # reshape to make loss work 
         inf_out = torch.transpose(inf_out, 1, 2)
-        assert inf_out.shape[-1] == labels.shape[-1], f"out: {inf_out.shape}, labels: {labels.shape}"
+        ## TODO: Find better solution to add padding
+        # print(labels)
+        padding = torch.zeros([labels.shape[0]]).unsqueeze(1).to(device)
+        labels = torch.cat((labels, padding), 1).type(torch.LongTensor).to(device)
+        
+        assert inf_out.shape[-1] == labels.shape[-1], f"out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
+        # assert inf_out.dtype == labels.dtype, f"not the same type {inf_out.dtype}, {labels.dtype}"
         inf_loss = loss_fn(inf_out, labels)
         
         # sum loss and do backward
@@ -280,9 +297,12 @@ def train(lm: torch.nn.Module,
         total_lm_loss += lm_loss.item()
         total_inf_loss += inf_loss.item()
         count += 1
+        # print({"lm_loss":lm_loss.item(), 
+        #           "inf_loss":inf_loss.item(), 
+        #           "total_sum_loss":sum_loss.item()})
         wandb.log({"lm_loss":lm_loss.item(), 
-                  "inf_loss":inf_loss, 
-                  "total_sum_loss":total_sum_loss}) # logs loss for each batch
+                  "inf_loss":inf_loss.item(), 
+                  "total_sum_loss":sum_loss.item()}) # logs loss for each batch
 
           # # weights update
           # if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
@@ -566,6 +586,9 @@ if __name__ == "__main__":
     val_data = val_loader
 
     # wandb logging
+    
+    os.environ["WANDB_API_KEY"] = "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"
+    os.environ["WANDB_MODE"] = "online"
     config = {"lr": str(lr).replace("0.", ""),
               "epochs": epochs,
               "batch_size": batch_size,
