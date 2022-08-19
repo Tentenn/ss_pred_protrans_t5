@@ -157,6 +157,10 @@ def random_spans_noise_mask(length, noise_density, mean_noise_span_length):
 
         return is_noise[:orig_length]
 
+def remove_eos_embedding(embedding):
+  last_index = embedding.shape[1] - 1
+  return embedding[:,:last_index]
+
 def main_training_loop(lm: torch.nn.Module, # Language model
                        inf_model: torch.nn.Module, # inferece model for downstream
                        train_data: DataLoader, 
@@ -277,13 +281,10 @@ def train(lm: torch.nn.Module,
 
         # get embeddings from lm output and pass through inference model
         embeddings = lm_output.encoder_last_hidden_state
+        embeddings = remove_eos_embedding(embeddings)
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
         # reshape to make loss work 
         inf_out = torch.transpose(inf_out, 1, 2)
-        ## TODO: Find better solution to add padding
-        # print(labels)
-        padding = torch.zeros([labels.shape[0]]).unsqueeze(1).to(device)
-        labels = torch.cat((labels, padding), 1).type(torch.LongTensor).to(device)
         
         assert inf_out.shape[-1] == labels.shape[-1], f"out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
         # assert inf_out.dtype == labels.dtype, f"not the same type {inf_out.dtype}, {labels.dtype}"
@@ -309,13 +310,15 @@ def train(lm: torch.nn.Module,
         optimizer.step()
     return total_sum_loss/count, total_lm_loss/count, total_inf_loss/count
 
-def validate(model: torch.nn.Module,
+def validate(lm: torch.nn.Module,
+          inf_model: torch.nn.Module,
           val_data: DataLoader,
           loss_fn):
     model.eval()
     
     last_accuracy = 0
-    total_loss = 0
+    total_inf_loss = 0
+    total_lm_loss = 0
     count = 0
     sum_accuracy = 0
     for i, batch in enumerate(val_data):
@@ -325,17 +328,31 @@ def validate(model: torch.nn.Module,
       ids = ids.to(device)
       mask = mask.to(device)
 
-      with torch.no_grad():
-        out = model(ids)
-
-      # reshape to make loss work 
-      out_f = torch.transpose(out, 1, 2)
-
-      # calculate loss
-      loss = loss_fn(out_f, labels_f)
-      total_loss += loss
+      # generate span masks and apply to ids
+      noise_mask = torch.tensor([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids]).to(device)
+      assert ids.shape == noise_mask.shape, "shape not the same length"
+      masked_input, masked_labels = apply_mask(ids, noise_mask, device)
+      masked_input = masked_input.to(device)
       
-      for batch_idx, out_logits in enumerate(out):
+      # forward pass of whole language model
+      assert len(ids.shape) == 2, "Shape not right"
+      assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
+      lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
+      lm_loss = lm_output.loss
+      total_lm_loss += lm_loss
+      
+      # get embeddings from lm output and pass through inference model
+      embeddings = lm_output.encoder_last_hidden_state
+      embeddings = remove_eos_embedding(embeddings)
+      inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+      # reshape to make loss work 
+      inf_out = torch.transpose(inf_out, 1, 2)
+
+      # calculate indeference loss
+      inf_loss = loss_fn(inf_out, labels_f)
+      total_inf_loss += inf_loss
+      
+      for batch_idx, out_logits in enumerate(inf_out):
         # Calculate scores for each sequence individually
         # And average over them
 
@@ -351,7 +368,7 @@ def validate(model: torch.nn.Module,
         sum_accuracy += acc
     last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
     # print("len acc scores: ", count, f"should be ({len(val_data)})")
-    return last_accuracy, total_loss/count
+    return last_accuracy, total_lm_loss/count, total_inf_loss
 
 def test(model: torch.nn.Module,
           test_data: DataLoader,
