@@ -482,13 +482,9 @@ def freeze_t5_model(model):
         param.requires_grad = True
 
 if __name__ == "__main__":
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    print("Using", device)
-    
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--bs", type=int, default=8)
-    parser.add_argument("--grac", type=int, default=10)
+    parser.add_argument("--grac", type=int, default=1)
     parser.add_argument("--maxemb", type=int, default=400)
     parser.add_argument("--optim", type=str, default="adamax")
     parser.add_argument("--lr", type=float, default=0.001)
@@ -505,6 +501,7 @@ if __name__ == "__main__":
     parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
     parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
     parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
+    parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -526,9 +523,17 @@ if __name__ == "__main__":
     freeze_epoch = args.fr
     seq_mask = args.msk
     datapath = args.datapath
+    device_name = args.device
+    
+    # Chose device
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if device_name == "cpu":
+        device = torch.device("cpu")
+    print("Using", device)
 
 
     # Choose model
+    print("load model...")
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
       tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50")
@@ -548,6 +553,7 @@ if __name__ == "__main__":
       assert False, f"Model type not implemented {model_type}"
     
     ## Data loading
+    print("load data...")
     train_path = datapath + trainset
     val_path = datapath + valset
 
@@ -597,15 +603,14 @@ if __name__ == "__main__":
             param.requires_grad = True
             unfr_c += 1
             # print(f"unfroze {layer}")
+    else:
+        print("No freezing")
 
     # For testing and logging
     train_data = train_loader
     val_data = val_loader
 
     # wandb logging
-    
-    os.environ["WANDB_API_KEY"] = "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"
-    os.environ["WANDB_MODE"] = "online"
     config = {"lr": str(lr).replace("0.", ""),
               "epochs": epochs,
               "batch_size": batch_size,
@@ -629,6 +634,7 @@ if __name__ == "__main__":
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
     # start training
+    print("start training...")
     gc.collect()
     main_training_loop(lm=model_pt5,
                         inf_model=model_cnn, 
