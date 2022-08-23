@@ -182,6 +182,10 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     elif optimizer_name == "adafactor":
       optimizer = Adafactor([{"params":lm.parameters(), 'lr': 0.00001}, {"params":inf_model.parameters(), 'lr': 0.0001}], 
       lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
+    elif optimizer_name == "mixed":
+      optimizer_lm = Adafactor(lm.parameters(), lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
+      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=0.0001)
+      optimizer = None
     # elif optimizer_name == "adafactor_rs":
     #   optimizer = Adafactor(model.parameters(), weight_decay=weight_decay)
     # elif optimizer_name == "adagrad":
@@ -196,30 +200,40 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     
     epochs_without_improvement = 0
     best_vloss = 10000
+    best_accuracy = 0
     
     for epoch in range(epochs):
       # train model and save train loss
       print(f"train epoch {epoch}")
-      t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum)
+      if optimizer_name == "mixed":
+        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum, optimizer_lm=optimizer_lm, optimizer_inf=optimizer_inf, mixed=True)
+      else:
+        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum)
       print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_sum,"t_loss_inf:",t_loss_lm)
       
-      assert False, "[DEV] Testing"
+      # assert False, "[DEV] Testing"
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
-      q3_accuracy, v_loss = validate(model, val_data, loss_fn)
+      q3_accuracy, v_loss_lm, v_loss_inf = validate(lm, inf_model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
-      wandb.log({"val_loss":v_loss})
+      wandb.log({"val_loss_lm":v_loss_lm})
+      wandb.log({"val_loss_inf":v_loss_inf})
       print("acc:", q3_accuracy)
+      print("val_loss_lm:", v_loss_lm)
+      print("val_loss_inf:", v_loss_inf)
+        
+      # assert False, "[DEV] Validation Testing"
     
       # update best vloss
-      if v_loss < best_vloss: # smaller is better
-        best_vloss = v_loss
+      if v_loss_inf < best_vloss and q3_accuracy > best_accuracy:
+        best_accuracy = q3_accuracy
+        best_vloss = v_loss_inf
         epochs_without_improvement = 0
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
-        if epochs_without_improvement >= 2:
+        if epochs_without_improvement >= 3:
             print("max amount of epochs without improvement reached. Stopping training...")
             break
       
@@ -247,12 +261,14 @@ def train(lm: torch.nn.Module,
           train_data: DataLoader,
           loss_fn,
           optimizer,
-          grad_accum):
+          grad_accum,
+          optimizer_lm=None,
+          optimizer_inf=None,
+          mixed=False):
     """
     do a train on a minibatch
     """
     model.train()
-    optimizer.zero_grad()
     total_sum_loss = 0 # summed loss
     total_lm_loss = 0 # language model loss
     total_inf_loss = 0 # inference model loss
@@ -260,7 +276,12 @@ def train(lm: torch.nn.Module,
     # batch accumulation parameter
     accum_iter = grad_accum
     for i, batch in enumerate(train_data):
-        optimizer.zero_grad()
+        if mixed:
+            optimizer_lm.zero_grad()
+            optimizer_inf.zero_grad()
+        else:
+            optimizer.zero_grad()
+            
         ids, label, mask = batch
         ids = ids.to(device)
         mask = mask.to(device)
@@ -278,11 +299,18 @@ def train(lm: torch.nn.Module,
         assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
         lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
         lm_loss = lm_output.loss
+        
+        # backward pass lm
+        if mixed:
+            lm_loss.backward(retain_graph=True)
+            optimizer_lm.step()
+            optimizer_lm.zero_grad()
 
         # get embeddings from lm output and pass through inference model
         embeddings = lm_output.encoder_last_hidden_state
         embeddings = remove_eos_embedding(embeddings)
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+        
         # reshape to make loss work 
         inf_out = torch.transpose(inf_out, 1, 2)
         
@@ -290,9 +318,17 @@ def train(lm: torch.nn.Module,
         # assert inf_out.dtype == labels.dtype, f"not the same type {inf_out.dtype}, {labels.dtype}"
         inf_loss = loss_fn(inf_out, labels)
         
+        # backward pass lm
+        if mixed:
+            inf_loss.backward(retain_graph=True)
+            optimizer_inf.step()
+            optimizer_inf.zero_grad()
+        
         # sum loss and do backward
-        sum_loss = lm_loss + inf_loss
-        sum_loss.backward()
+        if not mixed:
+            sum_loss = lm_loss + inf_loss*1.3
+            sum_loss.backward()
+            optimizer.step()
 
         total_sum_loss += sum_loss.item()
         total_lm_loss += lm_loss.item()
@@ -307,7 +343,7 @@ def train(lm: torch.nn.Module,
 
           # # weights update
           # if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
-        optimizer.step()
+        
     return total_sum_loss/count, total_lm_loss/count, total_inf_loss/count
 
 def validate(lm: torch.nn.Module,
@@ -337,20 +373,23 @@ def validate(lm: torch.nn.Module,
       # forward pass of whole language model
       assert len(ids.shape) == 2, "Shape not right"
       assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
-      lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
+      with torch.no_grad():
+        lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
       lm_loss = lm_output.loss
-      total_lm_loss += lm_loss
+      total_lm_loss += lm_loss.item()
       
       # get embeddings from lm output and pass through inference model
       embeddings = lm_output.encoder_last_hidden_state
       embeddings = remove_eos_embedding(embeddings)
-      inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+      with torch.no_grad():
+        inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+    
       # reshape to make loss work 
-      inf_out = torch.transpose(inf_out, 1, 2)
+      inf_out_for_loss = torch.transpose(inf_out, 1, 2)
 
       # calculate indeference loss
-      inf_loss = loss_fn(inf_out, labels_f)
-      total_inf_loss += inf_loss
+      inf_loss = loss_fn(inf_out_for_loss, labels_f)
+      total_inf_loss += inf_loss.item()
       
       for batch_idx, out_logits in enumerate(inf_out):
         # Calculate scores for each sequence individually
@@ -361,14 +400,14 @@ def validate(lm: torch.nn.Module,
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
         res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
-        assert seqlen == len(preds) == len(res_mask), "length of seqs not matching"
+        assert seqlen == len(preds) == len(res_mask), f"length of seqs not matching: {len(preds)} and {len(res_mask)}"
         count += 1
         
         acc = q3_acc(true_label, preds, res_mask)
         sum_accuracy += acc
     last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
     # print("len acc scores: ", count, f"should be ({len(val_data)})")
-    return last_accuracy, total_lm_loss/count, total_inf_loss
+    return last_accuracy, total_lm_loss/count, total_inf_loss/count
 
 def test(model: torch.nn.Module,
           test_data: DataLoader,
