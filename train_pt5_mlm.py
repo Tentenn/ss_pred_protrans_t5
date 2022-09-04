@@ -1,3 +1,14 @@
+"""
+This code trains the CNN for 3-State secondary structure prediction
+Using ProtTrans T5 per residue embeddings.
+
+For multi objective training, the protein language model 
+is fine-tuned using: masked language modeling, fine-tuning with 
+a simple CNN and a jsonl dataset.
+
+
+"""
+
 import torch
 from torch import nn
 import torch.optim as optim
@@ -33,16 +44,12 @@ from transformers import Adafactor
 from BertLinear import BertLinear
 
 
-"""
-This code trains the CNN for 3-State secondary structure prediction
-Using ProtTrans T5 per residue embeddings.
-"""
-
 CLASS_MAPPING = {"H":0, "E":1, "L":2, "C":2}
 
 def process_labels(labels: list, mask:list, onehot=False):
   """
-  turns a list of labels ['HEECCC', 'HHHEEEECCC'] labels and adds padding
+  turns a list of labels labels and adds padding
+  labels: example: ['HEECCC', 'HHHEEEECCC']
   """
   max_len = len(max(labels, key=len)) # determine longest sequence in list
   processed = []
@@ -72,16 +79,12 @@ def apply_mask(input_ids, noise_mask, device):
   assert len(np.copy(input_ids.cpu())) == len(input_ids), "copy length not the same"
   assert input_ids.shape == noise_mask.shape, f"input_ids: {input_ids} \n noise_mask: {noise_mask}"
   masked_input_ids = _filter_ids(copy.deepcopy(input_ids).to(device)*~noise_mask)
-  # masked_labels_ids = _filter_ids(np.copy(input_ids)*noise_mask)
-  # masked_labels_ids[-1] = 1
-  # masked_input_ids.append(tokenizer.eos_token_id) # add eos token
   return torch.tensor(masked_input_ids), "not implemented"# masked_labels_ids
 
 def logits_to_preds(logits):
   """
   @param logits: a tensor of size (seqlen, 3) containing logits of ss preds
   @returns: a list of predictions eg. [2, 1, 1, 2, 2, 2, 0] 
-  => dssp3 class_mapping = {0:"H",1:"E",2:"L"} 
   """
   preds = torch.max(logits, dim=1 )[1].detach().cpu().numpy().squeeze()
   return preds
@@ -184,7 +187,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
     elif optimizer_name == "mixed":
       optimizer_lm = Adafactor(lm.parameters(), lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
-      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=0.0001)
+      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=0.0005)
       optimizer = None
     # elif optimizer_name == "adafactor_rs":
     #   optimizer = Adafactor(model.parameters(), weight_decay=weight_decay)
@@ -206,6 +209,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       # train model and save train loss
       print(f"train epoch {epoch}")
       if optimizer_name == "mixed":
+        print("Using dualoptim")
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum, optimizer_lm=optimizer_lm, optimizer_inf=optimizer_inf, mixed=True)
       else:
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum)
@@ -267,6 +271,7 @@ def train(lm: torch.nn.Module,
           mixed=False):
     """
     do a train on a minibatch
+    mixed: whether or not 2 optimizers are used
     """
     model.train()
     total_sum_loss = 0 # summed loss
@@ -275,6 +280,7 @@ def train(lm: torch.nn.Module,
     count = 0
     # batch accumulation parameter
     accum_iter = grad_accum
+    
     for i, batch in enumerate(train_data):
         if mixed:
             optimizer_lm.zero_grad()
@@ -294,39 +300,34 @@ def train(lm: torch.nn.Module,
         masked_input, masked_labels = apply_mask(ids, noise_mask, device)
         masked_input = masked_input.to(device)
         
-        # forward pass of whole language model
+        # LM LOSS: forward pass of whole language model
         assert len(ids.shape) == 2, "Shape not right"
         assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
         lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
         lm_loss = lm_output.loss
-        
-        # backward pass lm
-        if mixed:
-            lm_loss.backward(retain_graph=True)
-            optimizer_lm.step()
-            optimizer_lm.zero_grad()
 
         # get embeddings from lm output and pass through inference model
         embeddings = lm_output.encoder_last_hidden_state
         embeddings = remove_eos_embedding(embeddings)
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
         
-        # reshape to make loss work 
+        # INF LOSS: reshape to make loss work 
         inf_out = torch.transpose(inf_out, 1, 2)
-        
-        assert inf_out.shape[-1] == labels.shape[-1], f"out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
+        assert inf_out.shape[-1] == labels.shape[-1], f"Shape not the same. out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
         # assert inf_out.dtype == labels.dtype, f"not the same type {inf_out.dtype}, {labels.dtype}"
         inf_loss = loss_fn(inf_out, labels)
         
-        # backward pass lm
-        if mixed:
-            inf_loss.backward(retain_graph=True)
-            optimizer_inf.step()
-            optimizer_inf.zero_grad()
+        sum_loss = lm_loss + inf_loss
         
-        # sum loss and do backward
-        if not mixed:
-            sum_loss = lm_loss + inf_loss*1.3
+        # backward() + step()
+        if mixed: # case: dual optimizer
+            optimizer_lm.zero_grad()
+            optimizer_inf.zero_grad()
+            sum_loss.backward()
+            optimizer_lm.step()
+            optimizer_inf.step()
+        else: # case: single optimizer
+            assert optimizer != None, "No optimizer found durin backward"
             sum_loss.backward()
             optimizer.step()
 
