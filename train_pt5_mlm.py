@@ -368,7 +368,7 @@ def validate(lm: torch.nn.Module,
       mask = mask.to(device)
 
       # generate span masks and apply to ids
-      noise_mask = torch.tensor([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids]).to(device)
+      noise_mask = torch.tensor(np.array([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids])).to(device)
       assert ids.shape == noise_mask.shape, "shape not the same length"
       masked_input, masked_labels = apply_mask(ids, noise_mask, device)
       masked_input = masked_input.to(device)
@@ -377,7 +377,7 @@ def validate(lm: torch.nn.Module,
       assert len(ids.shape) == 2, "Shape not right"
       assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
       with torch.no_grad():
-        lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
+        lm_output = lm(input_ids=masked_input, labels=ids)
       lm_loss = lm_output.loss
       total_lm_loss += lm_loss.item()
       
