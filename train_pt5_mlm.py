@@ -69,7 +69,9 @@ def _filter_ids(ids_tensor):
         for ind,e in enumerate(ids):
           # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
           if e == 0:
-            ids[ind] = tokenizer.additional_special_tokens_ids[0] ## TODO: Add more special tokens
+            if i < len(tokenizer.additional_special_tokens_ids):
+                i = 0
+            ids[ind] = tokenizer.additional_special_tokens_ids[i] ## TODO: Add more special tokens
             i += 1
     return ids_tensor
 
@@ -79,7 +81,7 @@ def apply_mask(input_ids, noise_mask, device):
   assert len(np.copy(input_ids.cpu())) == len(input_ids), "copy length not the same"
   assert input_ids.shape == noise_mask.shape, f"input_ids: {input_ids} \n noise_mask: {noise_mask}"
   masked_input_ids = _filter_ids(copy.deepcopy(input_ids).to(device)*~noise_mask)
-  return torch.tensor(masked_input_ids), "not implemented"# masked_labels_ids
+  return masked_input_ids, "not implemented"# masked_labels_ids
 
 def logits_to_preds(logits):
   """
@@ -295,7 +297,7 @@ def train(lm: torch.nn.Module,
         labels = process_labels(label, mask=mask).to(device)
 
         # generate span masks and apply to ids
-        noise_mask = torch.tensor([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids]).to(device)
+        noise_mask = torch.tensor(np.array([random_spans_noise_mask(len(single_ids), 0.15, 1) for single_ids in ids])).to(device)
         assert ids.shape == noise_mask.shape, "shape not the same length"
         masked_input, masked_labels = apply_mask(ids, noise_mask, device)
         masked_input = masked_input.to(device)
@@ -303,7 +305,7 @@ def train(lm: torch.nn.Module,
         # LM LOSS: forward pass of whole language model
         assert len(ids.shape) == 2, "Shape not right"
         assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
-        lm_output = lm(input_ids=masked_input, labels=torch.tensor(ids))
+        lm_output = lm(input_ids=masked_input, labels=ids)
         lm_loss = lm_output.loss
 
         # get embeddings from lm output and pass through inference model
