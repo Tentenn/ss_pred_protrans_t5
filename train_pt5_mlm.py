@@ -293,16 +293,17 @@ def train(lm: torch.nn.Module,
     for i, batch in enumerate(train_data):
         # Perform mid-train validation step
         if i%valstep==0:
-            print(f"Validate after step {i} of {len(train_data)}")
+            print(f"Validate after step {i} of {len(train_data)}", end=" ")
             mid_val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
-                                device=device, seed=42,
+                                device=device, seed=random.randint(1000, 9999),
                                 max_emb_size=2000, 
                                 tokenizer=tokenizer,
                                 max_samples=valsize)
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
             gc.collect()
+            print(f"(samples: {len(mid_val_loader)}) acc: {round(mid_q3_accuracy, 3)} vloss_inf: {round(mid_v_loss_inf, 3)}")
             
         
         # Check if using dual optimizer
@@ -565,7 +566,7 @@ if __name__ == "__main__":
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=50, help="do a validation after n steps")
-    parser.add_argument("--valsize", type=float, default=0.15, help="size of mini validation")
+    parser.add_argument("--valsize", type=float, default=0.10, help="size of mini validation")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -678,7 +679,7 @@ if __name__ == "__main__":
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }
-    experiment_name = f"{model_type}-{batch_size}_{epochs}_{max_emb_size}_{wandb_note}_{random.randint(300, 999)}"
+    experiment_name = f"{model_type}-{batch_size}_{epochs}_{max_emb_size}_{lm_lr}_{inf_lr}_{wandb_note}_{random.randint(300, 999)}"
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
     ## start training
