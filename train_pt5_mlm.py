@@ -178,7 +178,9 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                        weight_decay: float,
                        loss_fn,
                        freeze_epoch: int,
-                       device):
+                       device,
+                       inf_lr: float,
+                       lm_lr: float):
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -188,21 +190,14 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       optimizer = Adafactor([{"params":lm.parameters(), 'lr': 0.00001}, {"params":inf_model.parameters(), 'lr': 0.0001}], 
       lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
     elif optimizer_name == "mixed":
-      optimizer_lm = Adafactor(lm.parameters(), lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
-      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=0.0005)
+      optimizer_lm = Adafactor(lm.parameters(), lr=lm_lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
+      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=inf_lr)
       optimizer = None
-    # elif optimizer_name == "adafactor_rs":
-    #   optimizer = Adafactor(model.parameters(), weight_decay=weight_decay)
-    # elif optimizer_name == "adagrad":
-    #   optimizer = torch.optim.Adagrad(model.parameters(), lr=lr)
-    # elif optimizer_name == "rmsprop":
-    #   optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
+    
     # track best scores
     best_accuracy = float('-inf')
-    # best_loss = float('-inf')
-    
     epochs_without_improvement = 0
     best_vloss = 10000
     best_accuracy = 0
@@ -210,14 +205,15 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     for epoch in range(epochs):
       # train model and save train loss
       print(f"train epoch {epoch}")
-      if optimizer_name == "mixed":
-        print("Using dualoptim")
-        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum, optimizer_lm=optimizer_lm, optimizer_inf=optimizer_inf, mixed=True)
+      if optimizer_name == "mixed": # mixed = dual optimizer
+        print("Using dual optimizers")
+        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, 
+                                                  grad_accum, optimizer_lm=optimizer_lm,
+                                                  optimizer_inf=optimizer_inf, mixed=True)
       else:
-        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, grad_accum)
-      print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_sum,"t_loss_inf:",t_loss_lm)
-      
-      # assert False, "[DEV] Testing"
+        t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
+                                                  train_data, loss_fn, optimizer, grad_accum)
+      print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_lm,"t_loss_inf:",t_loss_inf)
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
@@ -228,38 +224,37 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       print("acc:", q3_accuracy)
       print("val_loss_lm:", v_loss_lm)
       print("val_loss_inf:", v_loss_inf)
-        
-      # assert False, "[DEV] Validation Testing"
     
       # update best vloss
       if v_loss_inf < best_vloss and q3_accuracy > best_accuracy:
         best_accuracy = q3_accuracy
         best_vloss = v_loss_inf
         epochs_without_improvement = 0
-      else:
-        epochs_without_improvement += 1
-        print(f"Epochs without improvement: {epochs_without_improvement}")
-        if epochs_without_improvement >= 3:
-            print("max amount of epochs without improvement reached. Stopping training...")
-            break
-      
-      # save model if better
-      if q3_accuracy > best_accuracy:
-        print("model saved")
+        print("saving models...")
         best_accuracy = q3_accuracy
-        # PATH = f"/home/ubuntu/instance1/datamodels/{batch_size}_{grad_accum}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{round(t_loss, 3)}_cnn.pt"
-        PATH = "model.pt"
+        lm_checkpoint_name = "pt5_lm_model.pt"
+        inf_checkpoint_name = "cnn_inf_model.pt"
         # torch.save({
         #             'epoch': epoch,
         #             'model_state_dict': model.state_dict(),
         #             'optimizer_state_dict': optimizer.state_dict(),
         #             'loss': t_loss,
         #             }, PATH)
-        torch.save(model.state_dict(), PATH)
+        # torch.save(lm.state_dict(), lm_checkpoint_name)
+        lm.save_pretrained(lm_checkpoint_name)
+        torch.save(inf_model.state_dict(), inf_checkpoint_name)
+        print("models saved")
+      else:
+        epochs_without_improvement += 1
+        print(f"Epochs without improvement: {epochs_without_improvement}")
+        if epochs_without_improvement >= 3:
+            print("max amount of epochs without improvement reached. Stopping training...")
+            break
+        
       
       # freezes t5 language model
       if epoch == freeze_epoch:
-        freeze_t5_model(model)
+        freeze_t5_model(lm)
 
 
 def train(lm: torch.nn.Module,
@@ -315,8 +310,7 @@ def train(lm: torch.nn.Module,
         
         # INF LOSS: reshape to make loss work 
         inf_out = torch.transpose(inf_out, 1, 2)
-        assert inf_out.shape[-1] == labels.shape[-1], f"Shape not the same. out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
-        # assert inf_out.dtype == labels.dtype, f"not the same type {inf_out.dtype}, {labels.dtype}"
+        assert inf_out.shape[-1] == labels.shape[-1], f"out: {inf_out.shape}, labels: {labels.shape} \n {inf_out} \n {labels}"
         inf_loss = loss_fn(inf_out, labels)
         
         sum_loss = lm_loss + inf_loss
@@ -337,9 +331,6 @@ def train(lm: torch.nn.Module,
         total_lm_loss += lm_loss.item()
         total_inf_loss += inf_loss.item()
         count += 1
-        # print({"lm_loss":lm_loss.item(), 
-        #           "inf_loss":inf_loss.item(), 
-        #           "total_sum_loss":sum_loss.item()})
         wandb.log({"lm_loss":lm_loss.item(), 
                   "inf_loss":inf_loss.item(), 
                   "total_sum_loss":sum_loss.item()}) # logs loss for each batch
@@ -353,7 +344,8 @@ def validate(lm: torch.nn.Module,
           inf_model: torch.nn.Module,
           val_data: DataLoader,
           loss_fn):
-    model.eval()
+    lm.eval()
+    inf_model.eval()
     
     last_accuracy = 0
     total_inf_loss = 0
@@ -367,19 +359,18 @@ def validate(lm: torch.nn.Module,
       ids = ids.to(device)
       mask = mask.to(device)
 
-      # generate span masks and apply to ids
-      noise_mask = torch.tensor(np.array([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids])).to(device)
-      assert ids.shape == noise_mask.shape, "shape not the same length"
-      masked_input, masked_labels = apply_mask(ids, noise_mask, device)
-      masked_input = masked_input.to(device)
+      # # generate span masks and apply to ids
+      # noise_mask = torch.tensor(np.array([random_spans_noise_mask(len(single_ids), 0.1, 1) for single_ids in ids])).to(device)
+      # assert ids.shape == noise_mask.shape, "shape not the same length"
+      # masked_input, masked_labels = apply_mask(ids, noise_mask, device)
+      # masked_input = masked_input.to(device)
       
       # forward pass of whole language model
       assert len(ids.shape) == 2, "Shape not right"
-      assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
       with torch.no_grad():
-        lm_output = lm(input_ids=masked_input, labels=ids)
+        lm_output = lm(input_ids=ids, labels=ids)
       lm_loss = lm_output.loss
-      total_lm_loss += lm_loss.item()
+      total_lm_loss += lm_loss.item() # loss not needed here
       
       # get embeddings from lm output and pass through inference model
       embeddings = lm_output.encoder_last_hidden_state
@@ -412,24 +403,47 @@ def validate(lm: torch.nn.Module,
     # print("len acc scores: ", count, f"should be ({len(val_data)})")
     return last_accuracy, total_lm_loss/count, total_inf_loss/count
 
-def test(model: torch.nn.Module,
-          test_data: DataLoader,
+def test(lm: torch.nn.Module,
+         inf_model: torch.nn.Module,
+         test_data: DataLoader,
          verbose=False):
     """
     verbose argument: whether or not to show actual predictions
     """
-    model.eval()
+    lm.eval()
+    inf_model.eval()
+    
     acc_scores = []
+    last_accuracy = 0
+    total_inf_loss = 0
+    total_lm_loss = 0
+    count = 0
+    sum_accuracy = 0
     for i, batch in enumerate(test_data):
       ids, label, mask = batch
 
       labels_f = process_labels(label, mask=mask, onehot=False).to(device)
       ids = ids.to(device)
       mask = mask.to(device)
-
+    
+      # get lm output 
       with torch.no_grad():
-        out = model(ids)
-      for batch_idx, out_logits in enumerate(out):
+        lm_output = lm(input_ids=ids, labels=ids)
+      
+      # get embeddings from lm output and pass through inference model
+      embeddings = lm_output.encoder_last_hidden_state
+      embeddings = remove_eos_embedding(embeddings)
+      with torch.no_grad():
+        inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+    
+      # reshape to make loss work 
+      inf_out_for_loss = torch.transpose(inf_out, 1, 2)
+
+      # calculate indeference loss
+      inf_loss = loss_fn(inf_out_for_loss, labels_f)
+      total_inf_loss += inf_loss.item()
+        
+      for batch_idx, out_logits in enumerate(inf_out):
         # Calculate scores for each sequence individually
         # And average over them
 
@@ -467,39 +481,15 @@ def custom_collate(data):
 
       inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
       # inputs = [d[0] for d in data]
+      # print([len(e) for e in inputs])
       inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
-
-      # now = datetime.now()
-      # current_time = now.strftime("%H:%M:%S")
-      # print(f"[{current_time}] shape", inputs.shape)
       
       labels = [d[1] for d in data]
-      res_mask = [torch.tensor([float(dig) for dig in d[2]]) for d in data]
+      res_mask = [torch.tensor(np.array([float(dig) for dig in d[2]])) for d in data]
       mask = pad_sequence(res_mask, batch_first=True)
       
       
       return inputs, labels, mask
-
-def seq_collate(data):
-  """
-  # https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
-  # data is a list of len batch size containing 3-tuple 
-  # containing seq, labels and mask
-  """
-
-  inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
-  inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
-
-  # now = datetime.now()
-  # current_time = now.strftime("%H:%M:%S")
-  # print(f"[{current_time}] shape", inputs.shape)
-  # print(inputs)
-  
-  labels = [d[1] for d in data]
-  res_mask = [torch.tensor([float(dig) for dig in d[2]]) for d in data]
-  mask = pad_sequence(res_mask, batch_first=True)
-  
-  return inputs, labels, mask
 
 
 def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
@@ -544,6 +534,9 @@ if __name__ == "__main__":
     parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
     parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("--lm_lr", type=float, default=0.0001)
+    parser.add_argument("--inf_lr", type=float, default=0.0001)
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -566,13 +559,15 @@ if __name__ == "__main__":
     seq_mask = args.msk
     datapath = args.datapath
     device_name = args.device
+    run_test = args.run_test
+    lm_lr = args.lm_lr
+    inf_lr = args.inf_lr
     
     # Chose device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if device_name == "cpu":
         device = torch.device("cpu")
     print("Using", device)
-
 
     # Choose model
     print("load model...")
@@ -582,15 +577,6 @@ if __name__ == "__main__":
       model_cnn = ConvNet().to(device)
       model_pt5 = T5ForConditionalGeneration.from_pretrained("Rostlab/prot_t5_xl_uniref50")
       model_pt5 = model_pt5.to(device)
-    # elif model_type == "pbert-cnn":
-    #   model = ProtBertCNN(dropout=dropout).to(device)
-    #   tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
-    # elif model_type == "pt5-lin":
-    #   model = T5Linear(dropout=dropout).to(device)
-    #   tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc", torch_dtype=torch.float16)
-    # elif model_type == "pbert-lin":
-    #   model = BertLinear(dropout=dropout).to(device)
-    #   tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
     else:
       assert False, f"Model type not implemented {model_type}"
     
@@ -610,14 +596,17 @@ if __name__ == "__main__":
                                 device=device, seed=42,
                                 max_emb_size=2000, tokenizer=tokenizer)
 
-    # Test loader
-    casp12_path = datapath + "casp12.jsonl"
-    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000, tokenizer=tokenizer)
+    if run_test:
+        # Test loader
+        casp12_path = datapath + "casp12.jsonl"
+        casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, 
+                                       device=device, seed=seed,
+                                     max_emb_size=5000, tokenizer=tokenizer)
 
-    npis_path = datapath + "new_pisces.jsonl"
-    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000, tokenizer=tokenizer)
+        npis_path = datapath + "new_pisces.jsonl"
+        npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, 
+                                     device=device, seed=seed,
+                                     max_emb_size=5000, tokenizer=tokenizer)
 
     # Apply freezing
     if args.trainable <= 0: ## -1 to freeze whole t5 model
@@ -672,12 +661,11 @@ if __name__ == "__main__":
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }
-    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{grad_accum}_{max_emb_size}_{wandb_note}"
+    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{max_emb_size}_{wandb_note}"
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
     # start training
     print("start training...")
-    gc.collect()
     main_training_loop(lm=model_pt5,
                         inf_model=model_cnn, 
                         train_data=train_data, 
@@ -690,25 +678,23 @@ if __name__ == "__main__":
                         optimizer_name=optimizer_name,
                         loss_fn=loss_fn,
                         weight_decay=weight_decay,
-                        freeze_epoch=freeze_epoch)
+                        freeze_epoch=freeze_epoch,
+                        inf_lr=inf_lr,
+                        lm_lr=lm_lr)
     
     ## Test data        
-    ## Load model
-    if model_type == "pt5-cnn":
-      model_cnn = ConvNet().to(device)
-      model_pt5 = T5ForConditionalGeneration.to(device)
-    # elif model_type == "pbert-cnn":
-    #   model = ProtBertCNN(dropout=dropout).to(device)
-    # elif model_type == "pt5-lin":
-    #   model = T5Linear(dropout=dropout).to(device)
-    # elif model_type == "pbert-lin":
-    #   model = BertLinear(dropout=dropout).to(device)
-    else:
-      assert False, f"Model type not implemented {model_type}"
-    
-    model.load_state_dict(torch.load("model.pt"))
-    model = model.to(device)
-    print("new_pisces:", test(model, npis_loader, verbose=False))
-    print("casp12:", test(model, casp12_loader, verbose=False))
+    if run_test:
+        ## Load model
+        if model_type == "pt5-cnn":
+          model_inf = ConvNet()
+          model_inf.load_state_dict(torch.load("cnn_inf_model.pt"))
+          model_pt5 = T5ForConditionalGeneration.from_pretrained("pt5_lm_model.pt")
+        else:
+          assert False, f"Model type not implemented {model_type}"
+
+        model_pt5 = model_pt5.to(device)
+        model_inf = model_inf.to(device)
+        print("new_pisces:", test(model_pt5, model_inf, npis_loader, verbose=False))
+        print("casp12:", test(model_pt5, model_inf, casp12_loader, verbose=False))
     
     
