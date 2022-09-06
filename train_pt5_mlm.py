@@ -180,7 +180,10 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                        freeze_epoch: int,
                        device,
                        inf_lr: float,
-                       lm_lr: float):
+                       lm_lr: float,
+                       valstep: int,
+                       valsize: int,
+                       val_path: str):
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -209,10 +212,14 @@ def main_training_loop(lm: torch.nn.Module, # Language model
         print("Using dual optimizers")
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, 
                                                   grad_accum, optimizer_lm=optimizer_lm,
-                                                  optimizer_inf=optimizer_inf, mixed=True)
+                                                  optimizer_inf=optimizer_inf, mixed=True,
+                                                  valstep=valstep, valsize=valsize,
+                                                  val_path=val_path)
       else:
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
-                                                  train_data, loss_fn, optimizer, grad_accum)
+                                                  train_data, loss_fn, optimizer, grad_accum,
+                                                  valstep=valstep, valsize=valsize,
+                                                  val_path=val_path)
       print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_lm,"t_loss_inf:",t_loss_inf)
 
       # validate results and calculate scores
@@ -265,12 +272,17 @@ def train(lm: torch.nn.Module,
           grad_accum,
           optimizer_lm=None,
           optimizer_inf=None,
-          mixed=False):
+          mixed=False,
+          valstep=100,
+          valsize=0.15,
+          val_path=None):
     """
     do a train on a minibatch
     mixed: whether or not 2 optimizers are used
     """
-    model.train()
+    inf_model.train()
+    lm.train()
+    
     total_sum_loss = 0 # summed loss
     total_lm_loss = 0 # language model loss
     total_inf_loss = 0 # inference model loss
@@ -279,6 +291,21 @@ def train(lm: torch.nn.Module,
     accum_iter = grad_accum
     
     for i, batch in enumerate(train_data):
+        # Perform mid-train validation step
+        if i%valstep==0:
+            print(f"Validate after step {i} of {len(train_data)}")
+            mid_val_loader = get_dataloader(jsonl_path=val_path, 
+                                batch_size=1, 
+                                device=device, seed=42,
+                                max_emb_size=2000, 
+                                tokenizer=tokenizer,
+                                max_samples=valsize)
+            mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
+            wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
+            gc.collect()
+            
+        
+        # Check if using dual optimizer
         if mixed:
             optimizer_lm.zero_grad()
             optimizer_inf.zero_grad()
@@ -493,13 +520,13 @@ def custom_collate(data):
 
 
 def get_dataloader(jsonl_path: str, batch_size: int, device: torch.device,
-                   seed: int, max_emb_size: int, tokenizer=None, masking=0) -> DataLoader:
+                   seed: int, max_emb_size: int, tokenizer=None, masking=0, max_samples=-1) -> DataLoader:
     torch.manual_seed(seed)
     dataset = SequenceDataset(jsonl_path=jsonl_path,
                            device=device,
                            max_emb_size=max_emb_size,
                              tokenizer=tokenizer,
-                             masking=masking)
+                             masking=masking, max_samples=max_samples)
     loader = DataLoader(dataset, batch_size=batch_size, 
                         shuffle=True, collate_fn=custom_collate)
     return loader
@@ -537,6 +564,8 @@ if __name__ == "__main__":
     parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
+    parser.add_argument("--valstep", type=int, default=50, help="do a validation after n steps")
+    parser.add_argument("--valsize", type=float, default=0.15, help="size of mini validation")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -562,14 +591,16 @@ if __name__ == "__main__":
     run_test = args.run_test
     lm_lr = args.lm_lr
     inf_lr = args.inf_lr
+    valstep = args.valstep
+    valsize = args.valsize
     
-    # Chose device
+    ## Chose device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if device_name == "cpu":
         device = torch.device("cpu")
     print("Using", device)
 
-    # Choose model
+    ## Choose model
     print("load model...")
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
@@ -584,31 +615,17 @@ if __name__ == "__main__":
     print("load data...")
     train_path = datapath + trainset
     val_path = datapath + valset
-
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
                                   device=device, seed=42,
                                   max_emb_size=max_emb_size, tokenizer=tokenizer,
                                  masking=seq_mask)
-
     val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
                                 device=device, seed=42,
                                 max_emb_size=2000, tokenizer=tokenizer)
 
-    if run_test:
-        # Test loader
-        casp12_path = datapath + "casp12.jsonl"
-        casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, 
-                                       device=device, seed=seed,
-                                     max_emb_size=5000, tokenizer=tokenizer)
-
-        npis_path = datapath + "new_pisces.jsonl"
-        npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, 
-                                     device=device, seed=seed,
-                                     max_emb_size=5000, tokenizer=tokenizer)
-
-    # Apply freezing
+    ## Apply freezing
     if args.trainable <= 0: ## -1 to freeze whole t5 model
         print("freeze all layers")
         freeze_t5_model(model)
@@ -637,11 +654,11 @@ if __name__ == "__main__":
     else:
         print("No freezing")
 
-    # For testing and logging
+    ## For testing and logging
     train_data = train_loader
     val_data = val_loader
 
-    # wandb logging
+    ## wandb logging
     config = {"lr": str(lr).replace("0.", ""),
               "inf_lr": inf_lr,
               "lm_lr": lm_lr,
@@ -655,18 +672,16 @@ if __name__ == "__main__":
               "dropout": dropout,
               "trainset": trainset,
               "valset": valset,
-              "casp12_path": casp12_path,
-              "npis_path": npis_path,
               "train_size": len(train_data),
               "val_size": len(val_data),
               "sequence_mask": seq_mask,
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }
-    experiment_name = f"{model_type}-{batch_size}_{lr}_{epochs}_{max_emb_size}_{wandb_note}"
+    experiment_name = f"{model_type}-{batch_size}_{epochs}_{max_emb_size}_{wandb_note}_{random.randint(300, 999)}"
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
-    # start training
+    ## start training
     print("start training...")
     main_training_loop(lm=model_pt5,
                         inf_model=model_cnn, 
@@ -682,10 +697,22 @@ if __name__ == "__main__":
                         weight_decay=weight_decay,
                         freeze_epoch=freeze_epoch,
                         inf_lr=inf_lr,
-                        lm_lr=lm_lr)
+                        lm_lr=lm_lr,
+                        valstep=valstep,
+                        valsize=valsize,
+                        val_path=val_path)
     
     ## Test data        
     if run_test:
+        # Test loader
+        casp12_path = datapath + "casp12.jsonl"
+        casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, 
+                                       device=device, seed=seed,
+                                     max_emb_size=5000, tokenizer=tokenizer)
+        npis_path = datapath + "new_pisces.jsonl"
+        npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, 
+                                     device=device, seed=seed,
+                                     max_emb_size=5000, tokenizer=tokenizer)
         ## Load model
         if model_type == "pt5-cnn":
           model_inf = ConvNet()

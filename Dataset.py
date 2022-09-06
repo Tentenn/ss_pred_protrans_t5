@@ -44,12 +44,21 @@ class SequenceDataset(Dataset):
                  device: torch.device,
                  max_emb_size=200,
                 tokenizer=None,
-                masking=0):
+                masking=0,
+                max_samples=-1):
         self.tokenizer = tokenizer
         self.masking = masking
         self.device = device
         self.max_emb_size = max_emb_size
         self.data_dict = utils.load_all_data(jsonl_path)
+        
+        # randomly throws out samples until % max_samples is reached
+        if max_samples > 0: 
+            throwout_mask = torch.rand((len(self.data_dict.keys()))) < max_samples
+            for k,m in zip(list(self.data_dict.keys()), throwout_mask):
+              if m.item():
+                self.data_dict.pop(k)
+            
         self.headers = tuple(self.data_dict.keys())
         # Header refers to uniprot id
         assert len(self.headers) == len(self.data_dict.keys()), "dict len not the same"
