@@ -643,6 +643,8 @@ if __name__ == "__main__":
 
     # wandb logging
     config = {"lr": str(lr).replace("0.", ""),
+              "inf_lr": inf_lr,
+              "lm_lr": lm_lr,
               "epochs": epochs,
               "batch_size": batch_size,
               "max_emb_size": max_emb_size,
