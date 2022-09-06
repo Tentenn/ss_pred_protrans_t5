@@ -187,14 +187,22 @@ def main_training_loop(lm: torch.nn.Module, # Language model
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    # elif optimizer_name == "adamax":
-    #   optimizer = Adamax(model.parameters(), lr=lr)
     elif optimizer_name == "adafactor":
       optimizer = Adafactor([{"params":lm.parameters(), 'lr': 0.00001}, {"params":inf_model.parameters(), 'lr': 0.0001}], 
       lr=lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
     elif optimizer_name == "mixed":
       optimizer_lm = Adafactor(lm.parameters(), lr=lm_lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
-      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=inf_lr)
+      optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=inf_lr, amsgrad=True)
+      t_total = len(train_data) * epochs
+      # optimizer_inf = Adamax(
+      #       inf_model.parameters(),
+      #       lr=inf_lr,
+      #       warmup=0.1,
+      #       t_total=t_total,
+      #       schedule="warmup_linear",
+      #       betas=(0.9, 0.999),
+      #       weight_decay=weight_decay,
+      #       max_grad_norm=1,)
       optimizer = None
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
@@ -365,6 +373,9 @@ def train(lm: torch.nn.Module,
 
           # # weights update
           # if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
+        
+        ## log optimizer learning rate
+        wandb.log({"inf_lr": optimizer_inf.get_lr()[0]})
         
     return total_sum_loss/count, total_lm_loss/count, total_inf_loss/count
 
@@ -545,7 +556,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bs", type=int, default=8)
     parser.add_argument("--grac", type=int, default=1)
-    parser.add_argument("--maxemb", type=int, default=400)
+    parser.add_argument("--maxemb", type=int, default=128)
     parser.add_argument("--optim", type=str, default="adamax")
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--epochs", type=int, default=4)
@@ -565,8 +576,8 @@ if __name__ == "__main__":
     parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
-    parser.add_argument("--valstep", type=int, default=50, help="do a validation after n steps")
-    parser.add_argument("--valsize", type=float, default=0.10, help="size of mini validation")
+    parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
+    parser.add_argument("--valsize", type=float, default=0.2, help="size of mini validation")
     args = parser.parse_args()
     
     batch_size = args.bs

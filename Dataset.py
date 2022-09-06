@@ -54,7 +54,7 @@ class SequenceDataset(Dataset):
         
         # randomly throws out samples until % max_samples is reached
         if max_samples > 0: 
-            throwout_mask = torch.rand((len(self.data_dict.keys()))) < max_samples
+            throwout_mask = torch.rand((len(self.data_dict.keys()))) < 1-max_samples
             for k,m in zip(list(self.data_dict.keys()), throwout_mask):
               if m.item():
                 self.data_dict.pop(k)
