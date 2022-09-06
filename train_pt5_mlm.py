@@ -375,7 +375,7 @@ def train(lm: torch.nn.Module,
           # if ((i + 1) % accum_iter == 0) or (i + 1 == len(train_data)):
         
         ## log optimizer learning rate
-        wandb.log({"inf_lr": optimizer_inf.get_lr()[0]})
+        # wandb.log({"inf_lr": optimizer_inf.get_lr()[0]})
         
     return total_sum_loss/count, total_lm_loss/count, total_inf_loss/count
 
