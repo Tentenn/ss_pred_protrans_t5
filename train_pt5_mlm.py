@@ -291,7 +291,6 @@ def train(lm: torch.nn.Module,
     for i, batch in enumerate(train_data):
         # Perform mid-train validation step
         if i%valstep==0:
-            print(f"Validate in step {i} of {len(train_data)}", end=" ")
             mid_val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
                                 device=device, seed=random.randint(1000, 9999),
@@ -303,7 +302,7 @@ def train(lm: torch.nn.Module,
             gc.collect()
             inf_model.train()
             lm.train()
-            print(f"n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)}")
+            print(f"Validate in step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)}")
             
         
         # Check if using dual optimizer
@@ -569,7 +568,7 @@ if __name__ == "__main__":
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
     parser.add_argument("--valsize", type=float, default=0.2, help="size of mini validation")
-    parser.add_argument("--emb_d", type=float, default=0.2, help="variable for density of embedding dropout")
+    parser.add_argument("--emb_d", type=float, default=0.25, help="variable for density of embedding dropout")
     parser.add_argument("--emb_d_mode", type=str, default="dropout")
     args = parser.parse_args()
     
