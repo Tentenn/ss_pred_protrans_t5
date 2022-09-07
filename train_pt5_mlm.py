@@ -183,7 +183,9 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                        lm_lr: float,
                        valstep: int,
                        valsize: int,
-                       val_path: str):
+                       val_path: str,
+                       emb_d: float,
+                       emb_d_mode: str):
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -222,12 +224,14 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                                                   grad_accum, optimizer_lm=optimizer_lm,
                                                   optimizer_inf=optimizer_inf, mixed=True,
                                                   valstep=valstep, valsize=valsize,
-                                                  val_path=val_path)
+                                                  val_path=val_path, emb_d=emb_d,
+                                                  emb_d_mode=emb_d_mode)
       else:
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
                                                   train_data, loss_fn, optimizer, grad_accum,
                                                   valstep=valstep, valsize=valsize,
-                                                  val_path=val_path)
+                                                  val_path=val_path, emb_d=emb_d,
+                                                  emb_d_mode=emb_d_mode)
       print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_lm,"t_loss_inf:",t_loss_inf)
 
       # validate results and calculate scores
@@ -283,7 +287,9 @@ def train(lm: torch.nn.Module,
           mixed=False,
           valstep=100,
           valsize=0.15,
-          val_path=None):
+          val_path=None, 
+          emb_d=0.2, 
+          emb_d_mode="default"):
     """
     do a train on a minibatch
     mixed: whether or not 2 optimizers are used
@@ -311,6 +317,8 @@ def train(lm: torch.nn.Module,
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
             gc.collect()
+            inf_model.train()
+            lm.train()
             print(f"(samples: {len(mid_val_loader)}) acc: {round(mid_q3_accuracy, 3)} vloss_inf: {round(mid_v_loss_inf, 3)}")
             
         
@@ -342,6 +350,7 @@ def train(lm: torch.nn.Module,
         # get embeddings from lm output and pass through inference model
         embeddings = lm_output.encoder_last_hidden_state
         embeddings = remove_eos_embedding(embeddings)
+        embeddings = add_noise_embedding(embeddings, density=emb_d, mode=emb_d_mode)
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
         
         # INF LOSS: reshape to make loss work 
@@ -578,6 +587,8 @@ if __name__ == "__main__":
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
     parser.add_argument("--valsize", type=float, default=0.2, help="size of mini validation")
+    parser.add_argument("--emb_d", type=float, default=0.2, "variable for density of embedding dropout")
+    parser.add_argument("--emb_d_mode", type=str, default="dropout")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -605,6 +616,8 @@ if __name__ == "__main__":
     inf_lr = args.inf_lr
     valstep = args.valstep
     valsize = args.valsize
+    emb_d = args.emb_d
+    emb_d_mode = args.emb_d_mode
     
     ## Chose device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -615,7 +628,6 @@ if __name__ == "__main__":
     ## Choose model
     print("load model...")
     if model_type == "pt5-cnn":
-      model = T5CNN().to(device)
       tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50")
       model_cnn = ConvNet().to(device)
       model_pt5 = T5ForConditionalGeneration.from_pretrained("Rostlab/prot_t5_xl_uniref50")
@@ -646,29 +658,20 @@ if __name__ == "__main__":
         trainable_t5_layers_stage1 = [str(integer) for integer in
                                       list(range(23, 23 - num_trainable_layers, -1))]
         print("Entering model freezing")
-        for layer, param in model.named_parameters():
+        for layer, param in model_pt5.named_parameters():
             param.requires_grad = False
         print("all layers frozen. Unfreezing trainable layers")
         unfr_c = 0
 
         # unfreeze desired layers
-        for layer, param in model.named_parameters():
+        for layer, param in model_pt5.named_parameters():
             lea = [trainable in layer for trainable in trainable_t5_layers_stage1]
             if sum(lea) >= 1:
                 param.requires_grad = True
                 unfr_c += 1
                 # print(f"unfroze {layer}")
-        # unfreeze CNN
-        for layer, param in list(model.named_parameters())[-4:]:
-            param.requires_grad = True
-            unfr_c += 1
-            # print(f"unfroze {layer}")
     else:
         print("No freezing")
-
-    ## For testing and logging
-    train_data = train_loader
-    val_data = val_loader
 
     ## wandb logging
     config = {"lr": str(lr).replace("0.", ""),
@@ -684,8 +687,8 @@ if __name__ == "__main__":
               "dropout": dropout,
               "trainset": trainset,
               "valset": valset,
-              "train_size": len(train_data),
-              "val_size": len(val_data),
+              "train_size": len(train_loader),
+              "val_size": len(val_loader),
               "sequence_mask": seq_mask,
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
@@ -712,7 +715,9 @@ if __name__ == "__main__":
                         lm_lr=lm_lr,
                         valstep=valstep,
                         valsize=valsize,
-                        val_path=val_path)
+                        val_path=val_path,
+                        emb_d=emb_d,
+                        emb_d_mode=emb_d_mode)
     
     ## Test data        
     if run_test:
