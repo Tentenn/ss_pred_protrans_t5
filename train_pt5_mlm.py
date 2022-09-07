@@ -196,15 +196,6 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       optimizer_lm = Adafactor(lm.parameters(), lr=lm_lr, relative_step=False, scale_parameter=False, weight_decay=weight_decay)
       optimizer_inf = torch.optim.Adam(inf_model.parameters(), lr=inf_lr, amsgrad=True)
       t_total = len(train_data) * epochs
-      # optimizer_inf = Adamax(
-      #       inf_model.parameters(),
-      #       lr=inf_lr,
-      #       warmup=0.1,
-      #       t_total=t_total,
-      #       schedule="warmup_linear",
-      #       betas=(0.9, 0.999),
-      #       weight_decay=weight_decay,
-      #       max_grad_norm=1,)
       optimizer = None
     else:
       assert False, f"Optimizer {optimizer_name} not implemented"
@@ -253,13 +244,6 @@ def main_training_loop(lm: torch.nn.Module, # Language model
         best_accuracy = q3_accuracy
         lm_checkpoint_name = "pt5_lm_model.pt"
         inf_checkpoint_name = "cnn_inf_model.pt"
-        # torch.save({
-        #             'epoch': epoch,
-        #             'model_state_dict': model.state_dict(),
-        #             'optimizer_state_dict': optimizer.state_dict(),
-        #             'loss': t_loss,
-        #             }, PATH)
-        # torch.save(lm.state_dict(), lm_checkpoint_name)
         lm.save_pretrained(lm_checkpoint_name)
         torch.save(inf_model.state_dict(), inf_checkpoint_name)
         print("models saved")
@@ -307,7 +291,7 @@ def train(lm: torch.nn.Module,
     for i, batch in enumerate(train_data):
         # Perform mid-train validation step
         if i%valstep==0:
-            print(f"Validate after step {i} of {len(train_data)}", end=" ")
+            print(f"Validate in step {i} of {len(train_data)}", end=" ")
             mid_val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
                                 device=device, seed=random.randint(1000, 9999),
@@ -319,7 +303,7 @@ def train(lm: torch.nn.Module,
             gc.collect()
             inf_model.train()
             lm.train()
-            print(f"(samples: {len(mid_val_loader)}) acc: {round(mid_q3_accuracy, 3)} vloss_inf: {round(mid_v_loss_inf, 3)}")
+            print(f"n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)}")
             
         
         # Check if using dual optimizer
@@ -349,8 +333,9 @@ def train(lm: torch.nn.Module,
 
         # get embeddings from lm output and pass through inference model
         embeddings = lm_output.encoder_last_hidden_state
+        # postprocessing embeddings
         embeddings = remove_eos_embedding(embeddings)
-        embeddings = add_noise_embedding(embeddings, density=emb_d, mode=emb_d_mode)
+        embeddings = utils.add_noise_embedding(embeddings, device=device, density=emb_d, mode=emb_d_mode)
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
         
         # INF LOSS: reshape to make loss work 
@@ -448,7 +433,6 @@ def validate(lm: torch.nn.Module,
         acc = q3_acc(true_label, preds, res_mask)
         sum_accuracy += acc
     last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
-    # print("len acc scores: ", count, f"should be ({len(val_data)})")
     return last_accuracy, total_lm_loss/count, total_inf_loss/count
 
 def test(lm: torch.nn.Module,
@@ -528,8 +512,6 @@ def custom_collate(data):
       """
 
       inputs = [torch.tensor(d[0]) for d in data] # converting embeds to tensor
-      # inputs = [d[0] for d in data]
-      # print([len(e) for e in inputs])
       inputs = pad_sequence(inputs, batch_first=True) # pad to longest batch
       
       labels = [d[1] for d in data]
@@ -587,7 +569,7 @@ if __name__ == "__main__":
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
     parser.add_argument("--valsize", type=float, default=0.2, help="size of mini validation")
-    parser.add_argument("--emb_d", type=float, default=0.2, "variable for density of embedding dropout")
+    parser.add_argument("--emb_d", type=float, default=0.2, help="variable for density of embedding dropout")
     parser.add_argument("--emb_d_mode", type=str, default="dropout")
     args = parser.parse_args()
     
@@ -700,8 +682,8 @@ if __name__ == "__main__":
     print("start training...")
     main_training_loop(lm=model_pt5,
                         inf_model=model_cnn, 
-                        train_data=train_data, 
-                        val_data=val_data, 
+                        train_data=train_loader, 
+                        val_data=val_loader, 
                         device=device, 
                         batch_size=batch_size,
                         lr=lr,
@@ -721,6 +703,7 @@ if __name__ == "__main__":
     
     ## Test data        
     if run_test:
+        print("start tesing...")
         # Test loader
         casp12_path = datapath + "casp12.jsonl"
         casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, 

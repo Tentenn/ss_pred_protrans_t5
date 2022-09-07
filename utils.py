@@ -34,9 +34,9 @@ def load_embeddings(embeddings_path):
     embeddings_dict = {seq_identifier: torch.tensor(np.array(f[seq_identifier])) for seq_identifier in f.keys()}
   return embeddings_dict
 
-def add_noise_embedding(embedding, density=0.2, mode="dropout", std=0.1, variance=0.5):
+def add_noise_embedding(embedding, device, density=0.2, mode="dropout", std=0.1, variance=0.5):
   if mode=="dropout":
-    mask = torch.rand(embedding.shape) < 1 - density
+    mask = torch.rand(embedding.shape, device=device) < 1 - density
     return embedding * mask
   elif mode=="noise":
-    return embedding + (std**variance)*torch.randn(embedding.shape)
+    return embedding + (std**variance)*torch.randn(embedding.shape, device=device)
