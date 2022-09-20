@@ -246,7 +246,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
         best_accuracy = q3_accuracy
         lm.save_pretrained(lm_chkpt)
         torch.save(inf_model.state_dict(), inf_chkpt)
-        print(f"models successfully saved as {lm_chpkt} and {inf_chkpt} at epoch {epoch}")
+        print(f"models successfully saved as {lm_chkpt} and {inf_chkpt} at epoch {epoch}")
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
