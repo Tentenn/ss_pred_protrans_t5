@@ -185,7 +185,9 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                        valsize: int,
                        val_path: str,
                        emb_d: float,
-                       emb_d_mode: str):
+                       emb_d_mode: str,
+                       lm_chkpt: str,
+                       inf_chkpt: str):
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -237,21 +239,19 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     
       # update best vloss
       if v_loss_inf < best_vloss and q3_accuracy > best_accuracy:
+        print(f"new best models found with {round(v_loss_inf, 3)} and {round(q3_accuracy, 3)}. Saving models...")
         best_accuracy = q3_accuracy
         best_vloss = v_loss_inf
         epochs_without_improvement = 0
-        print("saving models...")
         best_accuracy = q3_accuracy
-        lm_checkpoint_name = "pt5_lm_model.pt"
-        inf_checkpoint_name = "cnn_inf_model.pt"
-        lm.save_pretrained(lm_checkpoint_name)
-        torch.save(inf_model.state_dict(), inf_checkpoint_name)
-        print("models saved")
+        lm.save_pretrained(lm_chkpt)
+        torch.save(inf_model.state_dict(), inf_chkpt)
+        print(f"models successfully saved as {lm_chpkt} and {inf_chkpt} at epoch {epoch}")
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
         if epochs_without_improvement >= 3:
-            print("max amount of epochs without improvement reached. Stopping training...")
+            print("max amount of epochs (3) without improvement reached. Stopping training...")
             break
         
       
@@ -567,9 +567,11 @@ if __name__ == "__main__":
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
-    parser.add_argument("--valsize", type=float, default=0.2, help="size of mini validation")
+    parser.add_argument("--valsize", type=float, default=-1, help="size of mini validation, -1 for all val data, 0<x<1 for fraction")
     parser.add_argument("--emb_d", type=float, default=0.25, help="variable for density of embedding dropout")
     parser.add_argument("--emb_d_mode", type=str, default="dropout")
+    parser.add_argument("--lm_chkpt", type=str, default="pt5_lm_model.pt", help="name of checkpoint file of language model (.pt)")
+    parser.add_argument("--inf_chkpt", type=str, default="cnn_inf_model.pt", help="name of checkpoint file of inference model (.pt)")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -599,6 +601,8 @@ if __name__ == "__main__":
     valsize = args.valsize
     emb_d = args.emb_d
     emb_d_mode = args.emb_d_mode
+    lm_chkpt = args.lm_chkpt
+    inf_chkpt = args.inf_chkpt
     
     ## Chose device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -674,7 +678,7 @@ if __name__ == "__main__":
               "wandb_note": wandb_note,
               "number of trainable layers (freezing)": trainable,
               }
-    experiment_name = f"{model_type}-{batch_size}_{epochs}_{max_emb_size}_{lm_lr}_{inf_lr}_{wandb_note}_{random.randint(300, 999)}"
+    experiment_name = f"{wandb_note}_{model_type}-{batch_size}_{epochs}_{max_emb_size}_{lm_lr}_{inf_lr}_{random.randint(300, 999)}"
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
 
     ## start training
@@ -698,11 +702,13 @@ if __name__ == "__main__":
                         valsize=valsize,
                         val_path=val_path,
                         emb_d=emb_d,
-                        emb_d_mode=emb_d_mode)
+                        emb_d_mode=emb_d_mode,
+                        lm_chkpt=lm_chkpt,
+                        inf_chkpt=inf_chkpt)
     
     ## Test data        
     if run_test:
-        print("start tesing...")
+        print("start testing...")
         # Test loader
         casp12_path = datapath + "casp12.jsonl"
         casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, 
