@@ -24,6 +24,7 @@ import time
 import json
 import h5py
 import tqdm
+import argparse
 
 # Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50) 
 def get_T5_model(path):
@@ -143,7 +144,7 @@ def read_fasta(seqs_path):
         print("ERROR 01 Empty Line", seg)
   return seqs
 
-if __name__ == "__main__"
+if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--m", type=str, default="Rostlab/prot_t5_xl_half_uniref50-enc", help="path to t5 model folder")
@@ -160,7 +161,7 @@ if __name__ == "__main__"
     # Load fastas
     for data_path in data_paths:
       print(f"Creating embeddings for {data_path}")
-      path = data_dir_path + data_path
+      path = data_path # data_dir_path + data_path
       if args.p == "fasta":
         seqs = read_fasta(path)
       elif args.p == "jsonl":
@@ -171,7 +172,8 @@ if __name__ == "__main__"
       # Compute embeddings and/or secondary structure predictions
       results = get_embeddings(model, tokenizer, seqs)
       # write embeddings
-      out_path = data_path+f"-{args.m.replace("/", "-")}-"+"_pt5.h5"
+      model_name = args.m.replace("/", "-")
+      out_path = data_path+f"-{model_name}-"+"_pt5.h5"
       with h5py.File(str(out_path), "w") as hf:
         for sequence_id, embedding in results["residue_embs"].items():
             # noinspection PyUnboundLocalVariable
