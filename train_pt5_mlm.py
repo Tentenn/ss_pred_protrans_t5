@@ -218,13 +218,13 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                                                   optimizer_inf=optimizer_inf, mixed=True,
                                                   valstep=valstep, valsize=valsize,
                                                   val_path=val_path, emb_d=emb_d,
-                                                  emb_d_mode=emb_d_mode)
+                                                  emb_d_mode=emb_d_mode, val_data=val_data)
       else:
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
                                                   train_data, loss_fn, optimizer, grad_accum,
                                                   valstep=valstep, valsize=valsize,
                                                   val_path=val_path, emb_d=emb_d,
-                                                  emb_d_mode=emb_d_mode)
+                                                  emb_d_mode=emb_d_mode, val_data=val_data)
       print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_lm,"t_loss_inf:",t_loss_inf)
 
       # validate results and calculate scores
@@ -270,10 +270,11 @@ def train(lm: torch.nn.Module,
           optimizer_inf=None,
           mixed=False,
           valstep=100,
-          valsize=0.15,
+          valsize=-1,
           val_path=None, 
           emb_d=0.2, 
-          emb_d_mode="default"):
+          emb_d_mode="default",
+          val_data=None):
     """
     do a train on a minibatch
     mixed: whether or not 2 optimizers are used
@@ -289,14 +290,19 @@ def train(lm: torch.nn.Module,
     accum_iter = grad_accum
     
     for i, batch in enumerate(train_data):
-        # Perform mid-train validation step
+        # Perform mid-train validation step. Can be skipped to speed up training
         if i%valstep==0:
-            mid_val_loader = get_dataloader(jsonl_path=val_path, 
+            if valsize==-1:
+                mid_val_loader = val_data
+            elif 0<valsize<1:
+                mid_val_loader = get_dataloader(jsonl_path=val_path, 
                                 batch_size=1, 
-                                device=device, seed=random.randint(1000, 9999),
+                                device=device, seed=42,
                                 max_emb_size=2000, 
                                 tokenizer=tokenizer,
                                 max_samples=valsize)
+            else:
+                assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
             gc.collect()
@@ -566,7 +572,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
-    parser.add_argument("--valstep", type=int, default=25, help="do a validation after n steps")
+    parser.add_argument("--valstep", type=int, default=50, help="do a validation after n steps")
     parser.add_argument("--valsize", type=float, default=-1, help="size of mini validation, -1 for all val data, 0<x<1 for fraction")
     parser.add_argument("--emb_d", type=float, default=0.25, help="variable for density of embedding dropout")
     parser.add_argument("--emb_d_mode", type=str, default="dropout")
@@ -721,8 +727,8 @@ if __name__ == "__main__":
         ## Load model
         if model_type == "pt5-cnn":
           model_inf = ConvNet()
-          model_inf.load_state_dict(torch.load("cnn_inf_model.pt"))
-          model_pt5 = T5ForConditionalGeneration.from_pretrained("pt5_lm_model.pt")
+          model_inf.load_state_dict(torch.load(inf_chkpt))
+          model_pt5 = T5ForConditionalGeneration.from_pretrained(lm_chkpt)
         else:
           assert False, f"Model type not implemented {model_type}"
 

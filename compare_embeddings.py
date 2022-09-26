@@ -1,9 +1,10 @@
 """
 Utilization:
-python compare_embeddings.py --f1 <path_to_h5_file> --f2 <path_to_h5_file>
+python compare_embeddings.py --f1 <path_to_h5_file> --f2 <path_to_h5_file> --f3 <path_to_h5_file>
 
 What it does:
-compares these embeddings file using euclidean distance and cosine similarity
+compares these embeddings file using euclidean distance and cosine similarity.
+The first on is the embeddings it is compared to
 """
 
 
@@ -23,7 +24,7 @@ def cosine_sim_embedds(emb1, emb2):
   """
   emb1_rs = torch.reshape(emb1, (-1, ))
   emb2_rs = torch.reshape(emb2, (-1, ))
-  return spatial.distance.cosine(emb1_rs, emb2_rs)
+  return 1 - spatial.distance.cosine(emb1_rs, emb2_rs)
 
 def eucl_dist_embedds(emb1, emb2):
   """
@@ -41,19 +42,9 @@ def load_embeddings(path):
     embeddings_dict = {seq_identifier: torch.tensor(np.array(f[seq_identifier])) for seq_identifier in f.keys()}
   return embeddings_dict
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--f1", type=str, help="Path to .h5 file")
-    parser.add_argument("--f2", type=str, help="Path to .h5 file")
-    args = parser.parse_args()
-    
-    embeddings1 = load_embeddings(args.f1)
-    embeddings2 = load_embeddings(args.f2)
-
+def describe_difference(embeddings1, embeddings2, name=""):
     cosim = []
     eudist = []
-    
     for key in embeddings1.keys():
         emb1 = embeddings1[key]
         emb2 = embeddings2[key]
@@ -63,15 +54,38 @@ if __name__ == "__main__":
     cosim_df = pd.Series(cosim)
     eudist_df = pd.Series(eudist)
     
-    print("Cosine Similarity:")
+    print(f"Cosine Similarity between {name}:")
     print(cosim_df.describe())
-    print("Euclidean Distance:")
+    print(f"Euclidean Distance between {name}:")
     print(eudist_df.describe())
     
-    n_samples = len(embeddings1.keys())
+    return cosim, eudist
     
-    plt.scatter([i for i in range(n_samples)], eudist, s=3)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--f1", type=str, help="Path to .h5 file, f2 and f3 are compared to f1")
+    parser.add_argument("--f2", type=str, help="Path to .h5 file")
+    parser.add_argument("--f3", type=str, help="Path to .h5 file")
+    args = parser.parse_args()
+    
+    embeddings1 = load_embeddings(args.f1)
+    embeddings2 = load_embeddings(args.f2)
+    embeddings3 = load_embeddings(args.f3)
+
+    cosim12, eudist12 = describe_difference(embeddings1, embeddings2, name="lr=5e-05")
+    cosim13, eudist13 = describe_difference(embeddings1, embeddings3, name="lr=0.001")
+    
+    
+    n_samples = len(embeddings1.keys())
+    # x_axis = ["pt5-ft_lr=5e-05" for i in range(n_samples)] + ["pt5-ft_lr=0.001" for i in range(n_samples)]
+    x_axis = [i for i in range(n_samples)] + [i for i in range(n_samples)]
+    colors = ["blue" for _ in range(n_samples)] + ["red" for _ in range(n_samples)]
+    eudist_y_axis = eudist12 + eudist13
+    cosim_y_axis = cosim12 + cosim13
+    
+    plt.scatter(x_axis, eudist_y_axis, s=3, color=colors)
     plt.savefig("eudist.png")
     plt.clf()
-    plt.scatter([i for i in range(n_samples)], cosim, s=3)
+    plt.scatter(x_axis, cosim_y_axis, s=3, color=colors)
     plt.savefig("cosim.png")
