@@ -569,15 +569,17 @@ if __name__ == "__main__":
     parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
     parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction) ## Not Working!
     parser.add_argument("--lm_lr", type=float, default=0.0001)
     parser.add_argument("--inf_lr", type=float, default=0.0001)
     parser.add_argument("--valstep", type=int, default=50, help="do a validation after n steps")
     parser.add_argument("--valsize", type=float, default=-1, help="size of mini validation, -1 for all val data, 0<x<1 for fraction")
     parser.add_argument("--emb_d", type=float, default=0.25, help="variable for density of embedding dropout")
-    parser.add_argument("--emb_d_mode", type=str, default="dropout")
+    parser.add_argument("--emb_d_mode", type=str, default="dropout", help="available modes: noise, dropout, residue")
     parser.add_argument("--lm_chkpt", type=str, default="pt5_lm_model.pt", help="name of checkpoint file of language model (.pt)")
     parser.add_argument("--inf_chkpt", type=str, default="cnn_inf_model.pt", help="name of checkpoint file of inference model (.pt)")
+    parser.add_argument("--from_chkpt_lm", type=str, default=None, help="start training from a language model checkpoint")
+    parser.add_argument("--from_chkpt_inf", type=str, default=None, help="start training from a inference checkpoint")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -620,9 +622,16 @@ if __name__ == "__main__":
     print("load model...")
     if model_type == "pt5-cnn":
       tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50")
-      model_cnn = ConvNet().to(device)
-      model_pt5 = T5ForConditionalGeneration.from_pretrained("Rostlab/prot_t5_xl_uniref50")
+      if args.from_chkpt_inf is not None:
+        print(f"Starting training of inference model from a checkpoint {args.from_chkpt_inf}")
+        model_cnn.load_state_dict(torch.load(args.from_chkpt_inf))
+      if args.from_chkpt_lm is not None:
+        print(f"Starting training of language model from a checkpoint {args.from_chkpt_lm}")
+        model_pt5 = T5ForConditionalGeneration.from_pretrained(args.from_chkpt_lm)
+      else:
+        model_pt5 = T5ForConditionalGeneration.from_pretrained("Rostlab/prot_t5_xl_uniref50")
       model_pt5 = model_pt5.to(device)
+      model_cnn = ConvNet().to(device)
     else:
       assert False, f"Model type not implemented {model_type}"
     
