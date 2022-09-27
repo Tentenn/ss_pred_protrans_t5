@@ -144,13 +144,8 @@ def main_training_loop(model: torch.nn.Module,
       # save model if better
       if q3_accuracy > best_accuracy:
         best_accuracy = q3_accuracy
-        PATH = f"{bs}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{t_loss}_cnn.pt"
-        torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': t_loss,
-                    }, PATH)
+        PATH = f"bs={bs}_lr={lr}_te={epoch}_{round(q3_accuracy, 3)}_{t_loss}_cnn.pt"
+        torch.save(model.state_dict(), PATH)
 
 
 def train(model: torch.nn.Module,
