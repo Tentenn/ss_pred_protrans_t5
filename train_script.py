@@ -23,6 +23,8 @@ from sklearn.metrics import accuracy_score
 import gc
 import wandb
 import sys
+import random
+import argparse
 
 import utils
 from ConvNet import ConvNet
@@ -111,18 +113,21 @@ def process_label(labels: list, mask:list, onehot=True):
 def main_training_loop(model: torch.nn.Module, 
                        train_data: DataLoader, 
                        val_data: DataLoader, 
-                       device):
-    bs = 80
-    lr = 0.01
+                       device,
+                       lr,
+                       bs,
+                       epochs):
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    epochs = 4
 
     # wandb logging
     config = {"learning_rate": lr,
               "epochs": epochs,
               "batch_size": bs,
               "optimizer": optimizer}
-    wandb.init(project="emb_fex", entity="kyttang", config=config)
+    
+    exp_name = f"{random.randint(300, 999)}_lr={lr}_ep={epochs}_bs={bs}"
+    wandb.init(project="continued_training", entity="kyttang", config=config, name=exp_name)
     # track best scores
     best_accuracy = float('-inf')
     best_loss = float('-inf')
@@ -139,7 +144,7 @@ def main_training_loop(model: torch.nn.Module,
       # save model if better
       if q3_accuracy > best_accuracy:
         best_accuracy = q3_accuracy
-        PATH = f"{bs}_{lr}_{epochs}_{round(q3_accuracy, 1)}_{t_loss}_cnn.pt"
+        PATH = f"{bs}_{lr}_{epochs}_{round(q3_accuracy, 3)}_{t_loss}_cnn.pt"
         torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -224,7 +229,7 @@ def validate(model: torch.nn.Module,
         true_label = label_to_id(label[batch_idx]) # convert label to machine readable.
         res_mask = mask[batch_idx][:seqlen] # [:seqlen] to cut the padding
 
-        print(seqlen, len(preds), len(res_mask))
+        # print(seqlen, len(preds), len(res_mask))
         assert seqlen == len(preds) == len(res_mask), f"length of seqs not matching"
         
         acc = q3_acc(true_label, preds, res_mask)
@@ -277,11 +282,13 @@ def q3_acc(y_true, y_pred, mask):
   # print("ypred: ", y_pred)
   return accuracy_score(y_true, y_pred, sample_weight=[int(e) for e in mask])
 
-def sov(y_true, y_pred):
-  pass
-
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bs", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=4)
+    args = parser.parse_args()
     ## Collect garbage
     gc.collect()
 
@@ -290,8 +297,10 @@ if __name__ == "__main__":
 
     ## Data loading
     print("Data loading")
-    train_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/train.jsonl_embeddings.h5"
-    val_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/val.jsonl_embeddings.h5"
+    # train_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/train.jsonl_embeddings.h5"
+    train_embeds_path = "/notebooks/ss_pred_protrans_t5/data/train.jsonl-Rostlab-prot_t5_xl_half_uniref50-enc-_pt5.h5"
+    # val_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/val.jsonl_embeddings.h5"
+    val_embeds_path = "/notebooks/ss_pred_protrans_t5/data/val.jsonl-Rostlab-prot_t5_xl_half_uniref50-enc-_pt5.h5"
 
     train_labels_path = "data/train.jsonl"
     val_labels_path = "data/val.jsonl"
@@ -315,6 +324,6 @@ if __name__ == "__main__":
 
     ## Train and validate (train and validate)
     print("start Training")
-    main_training_loop(model=cnn, train_data=train_loader, val_data=val_loader, device=device)
+    main_training_loop(model=cnn, train_data=train_loader, val_data=val_loader, device=device, lr=args.lr, bs=args.bs, epochs=args.epochs)
     
     ## 
