@@ -244,9 +244,12 @@ def main_training_loop(lm: torch.nn.Module, # Language model
         best_vloss = v_loss_inf
         epochs_without_improvement = 0
         best_accuracy = q3_accuracy
-        lm.save_pretrained(lm_chkpt)
-        torch.save(inf_model.state_dict(), inf_chkpt)
-        print(f"models successfully saved as {lm_chkpt} and {inf_chkpt} at epoch {epoch}")
+        if best_accuracy > 0.85:
+            lm.save_pretrained(lm_chkpt)
+            torch.save(inf_model.state_dict(), inf_chkpt)
+            print(f"models successfully saved as {lm_chkpt} and {inf_chkpt} at epoch {epoch}")
+        else:
+            print("skip saving because of low accuracy < 0.85")
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
@@ -312,7 +315,7 @@ def train(lm: torch.nn.Module,
             inf_model.train()
             lm.train()
             now = datetime.now()
-            print(f"[{now.strftime("%H:%M:%S")}] Step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)} time: {now-t1}")
+            print(f"[{now.strftime('%H:%M:%S')}] Step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)} time: {now-t1}")
             
         
         # Check if using dual optimizer
@@ -571,7 +574,7 @@ if __name__ == "__main__":
     parser.add_argument("--wd", type=float, default=0.01)
     parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
     parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
-    parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
+    parser.add_argument("--datapath", type=str, help="path to datafolder", default="/datasets/ss_data_1/")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument('--run_test', default=True, action=argparse.BooleanOptionalAction) ## Not Working!
     parser.add_argument("--lm_lr", type=float, default=0.0001)
