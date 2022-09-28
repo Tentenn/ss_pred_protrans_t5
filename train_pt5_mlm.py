@@ -209,10 +209,10 @@ def main_training_loop(lm: torch.nn.Module, # Language model
     best_accuracy = 0
     
     for epoch in range(epochs):
+      t1_time = datetime.now()
       # train model and save train loss
       print(f"train epoch {epoch}")
       if optimizer_name == "mixed": # mixed = dual optimizer
-        print("Using dual optimizers")
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, train_data, loss_fn, optimizer, 
                                                   grad_accum, optimizer_lm=optimizer_lm,
                                                   optimizer_inf=optimizer_inf, mixed=True,
@@ -220,6 +220,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                                                   val_path=val_path, emb_d=emb_d,
                                                   emb_d_mode=emb_d_mode, val_data=val_data)
       else:
+        print("using single optimizer for lm and inf model")
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
                                                   train_data, loss_fn, optimizer, grad_accum,
                                                   valstep=valstep, valsize=valsize,
@@ -233,9 +234,8 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss_lm":v_loss_lm})
       wandb.log({"val_loss_inf":v_loss_inf})
-      print("acc:", q3_accuracy)
-      print("val_loss_lm:", v_loss_lm)
-      print("val_loss_inf:", v_loss_inf)
+      now = datetime.now()
+      print("acc:", q3_accuracy, "val_loss_lm:", v_loss_lm, "val_loss_inf:", v_loss_inf, "compute_time:", now-t1_time)
     
       # update best vloss
       if v_loss_inf < best_vloss and q3_accuracy > best_accuracy:
@@ -258,6 +258,8 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       # freezes t5 language model
       if epoch == freeze_epoch:
         freeze_t5_model(lm)
+      t2_time = datetime.now()
+      print("Total time for this epoch:", t2_time-t1_time)
 
 
 def train(lm: torch.nn.Module,
@@ -303,12 +305,14 @@ def train(lm: torch.nn.Module,
                                 max_samples=valsize)
             else:
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
+            t1 = datetime.now()
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
             gc.collect()
             inf_model.train()
             lm.train()
-            print(f"Validate in step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)}")
+            now = datetime.now()
+            print(f"[{now.strftime("%H:%M:%S")}] Step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)} time: {now-t1}")
             
         
         # Check if using dual optimizer
