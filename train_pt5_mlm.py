@@ -616,6 +616,9 @@ if __name__ == "__main__":
     lm_chkpt = args.lm_chkpt
     inf_chkpt = args.inf_chkpt
     
+    ## Log arguments
+    print(' '.join(f'{k}={v}' for k, v in vars(args).items()))
+    
     ## Chose device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     if device_name == "cpu":
