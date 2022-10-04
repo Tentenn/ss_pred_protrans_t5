@@ -144,6 +144,8 @@ def read_fasta(seqs_path):
         print("ERROR 01 Empty Line", seg)
   return seqs
 
+    
+    
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()

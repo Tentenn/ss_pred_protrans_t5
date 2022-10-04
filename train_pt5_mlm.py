@@ -42,6 +42,8 @@ from ConvNet import ConvNet
 from smart_optim import Adamax
 from transformers import Adafactor
 from BertLinear import BertLinear
+import compare_embeddings 
+import gen_embeddings
 
 
 CLASS_MAPPING = {"H":0, "E":1, "L":2, "C":2}
@@ -293,10 +295,13 @@ def train(lm: torch.nn.Module,
     count = 0
     # batch accumulation parameter
     accum_iter = grad_accum
+    tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50")
     
     for i, batch in enumerate(train_data):
-        # Perform mid-train validation step. Can be skipped to speed up training
+        ## Perform mid-train validation step. Can be skipped to speed up training
+        compare_embeds = True
         if i%valstep==0:
+            t1 = datetime.now()
             if valsize==-1:
                 mid_val_loader = val_data
             elif 0<valsize<1:
@@ -308,17 +313,50 @@ def train(lm: torch.nn.Module,
                                 max_samples=valsize)
             else:
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
-            t1 = datetime.now()
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
+            # log metric for embeddings similarity
+            if compare_embeds:
+                print("Start comparing embeddings...")
+                # get seqs for validation set
+                seqs = gen_embeddings.read_jsonl("data/val.jsonl")
+                # call generate embeddings and save as h5 file
+                
+                print("Generating embeddings...")
+                lm_state_dict = lm.encoder.state_dict()
+                lm_encoder = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+                lm_encoder.encoder.load_state_dict(lm_state_dict)
+                lm_encoder = lm_encoder.to(device)
+                results = gen_embeddings.get_embeddings(lm_encoder, tokenizer, seqs)
+                # write embeddings
+                print("Writing embeddings to disk...")
+                model_name = f"pt5-ft-mlm-{round(mid_q3_accuracy, 3)}-{round(mid_v_loss_inf, 3)}"
+                out_path = f"{model_name}-"+"_pt5.h5"
+                with h5py.File(str(out_path), "w") as hf:
+                  for sequence_id, embedding in results["residue_embs"].items():
+                      # noinspection PyUnboundLocalVariable
+                      hf.create_dataset(sequence_id, data=embedding)
+                # load both embeddings file
+                print("Loading embeddings for comparison...")
+                baseline_embeds = compare_embeddings.load_embeddings("data/val.jsonl-Rostlab-prot_t5_xl_half_uniref50-enc-_pt5.h5") 
+                finetuned_embeds = compare_embeddings.load_embeddings(out_path)
+                # compare embeddings
+                print("Compare embeddings")
+                cosim, eudist = compare_embeddings.describe_difference(baseline_embeds, finetuned_embeds, name="val_embeddings.h5")
+                # log data 
+                cosim_mean = sum(cosim)/len(cosim)
+                eudist_mean = sum(eudist)/len(eudist)
+                wandb.log({"cosim":cosim_mean, "eudist":eudist_mean})
+                print("Successfully logged embedding difference")
             gc.collect()
             inf_model.train()
             lm.train()
             now = datetime.now()
             print(f"[{now.strftime('%H:%M:%S')}] Step {i} of {len(train_data)} n: {len(mid_val_loader)} acc: {round(mid_q3_accuracy, 3)} vloss: {round(mid_v_loss_inf, 3)} time: {now-t1}")
             
+            
         
-        # Check if using dual optimizer
+        ## Check if using dual optimizer
         if mixed:
             optimizer_lm.zero_grad()
             optimizer_inf.zero_grad()
@@ -587,6 +625,7 @@ if __name__ == "__main__":
     parser.add_argument("--inf_chkpt", type=str, default="cnn_inf_model.pt", help="name of checkpoint file of inference model (.pt)")
     parser.add_argument("--from_chkpt_lm", type=str, default=None, help="start training from a language model checkpoint")
     parser.add_argument("--from_chkpt_inf", type=str, default=None, help="start training from a inference checkpoint")
+    # parser.add_argument("--dCE", type=)
     args = parser.parse_args()
     
     batch_size = args.bs
