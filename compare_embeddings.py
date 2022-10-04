@@ -42,7 +42,7 @@ def load_embeddings(path):
     embeddings_dict = {seq_identifier: torch.tensor(np.array(f[seq_identifier])) for seq_identifier in f.keys()}
   return embeddings_dict
 
-def describe_difference(embeddings1, embeddings2, name=""):
+def describe_difference(embeddings1, embeddings2, name="", verbose=False):
     cosim = []
     eudist = []
     for key in embeddings1.keys():
@@ -54,10 +54,11 @@ def describe_difference(embeddings1, embeddings2, name=""):
     cosim_df = pd.Series(cosim)
     eudist_df = pd.Series(eudist)
     
-    print(f"Cosine Similarity between {name}:")
-    print(cosim_df.describe())
-    print(f"Euclidean Distance between {name}:")
-    print(eudist_df.describe())
+    if verbose:
+        print(f"Cosine Similarity between {name}:")
+        print(cosim_df.describe())
+        print(f"Euclidean Distance between {name}:")
+        print(eudist_df.describe())
     
     return cosim, eudist
     

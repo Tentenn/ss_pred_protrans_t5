@@ -33,6 +33,8 @@ import random
 import argparse
 import copy
 import os
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 import utils
 from Dataset import SequenceDataset
@@ -297,6 +299,8 @@ def train(lm: torch.nn.Module,
     accum_iter = grad_accum
     tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50")
     
+    
+    
     for i, batch in enumerate(train_data):
         ## Perform mid-train validation step. Can be skipped to speed up training
         compare_embeds = True
@@ -313,8 +317,20 @@ def train(lm: torch.nn.Module,
                                 max_samples=valsize)
             else:
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
-            mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf = validate(lm, inf_model, mid_val_loader, loss_fn)
+            mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf, acc_score_list = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
+            plot_accuracy = True
+            if plot_accuracy:
+                
+                n_samples = len(acc_score_list)
+                color_palette = sns.color_palette("hls", n_samples)
+                x_axis = [j for j in range(n_samples)]
+                colors = color_palette # [color_palette[i] for _ in range(n_samples)]
+                plt.scatter(x_axis, acc_score_list, s=5, color=colors)
+                plt.savefig(f"plots/accs{i}.png")
+                plt.clf()
+                print("Saved accuracy plots!")
+                
             # log metric for embeddings similarity
             if compare_embeds:
                 print("Start comparing embeddings...")
@@ -331,7 +347,7 @@ def train(lm: torch.nn.Module,
                 # write embeddings
                 print("Writing embeddings to disk...")
                 model_name = f"pt5-ft-mlm-{round(mid_q3_accuracy, 3)}-{round(mid_v_loss_inf, 3)}"
-                out_path = f"{model_name}-"+"_pt5.h5"
+                out_path = "val_embeddings.h5"# f"{model_name}-"+"_pt5.h5"
                 with h5py.File(str(out_path), "w") as hf:
                   for sequence_id, embedding in results["residue_embs"].items():
                       # noinspection PyUnboundLocalVariable
@@ -342,12 +358,19 @@ def train(lm: torch.nn.Module,
                 finetuned_embeds = compare_embeddings.load_embeddings(out_path)
                 # compare embeddings
                 print("Compare embeddings")
-                cosim, eudist = compare_embeddings.describe_difference(baseline_embeds, finetuned_embeds, name="val_embeddings.h5")
+                cosim, eudist = compare_embeddings.describe_difference(baseline_embeds, finetuned_embeds, name=out_path)
                 # log data 
                 cosim_mean = sum(cosim)/len(cosim)
                 eudist_mean = sum(eudist)/len(eudist)
                 wandb.log({"cosim":cosim_mean, "eudist":eudist_mean})
                 print("Successfully logged embedding difference")
+            # log individual protein accuracy
+            log_indi_prot = True
+            if log_indi_prot:
+                ## TODO: save plot as image
+                
+                pass
+            
             gc.collect()
             inf_model.train()
             lm.train()
@@ -435,6 +458,8 @@ def validate(lm: torch.nn.Module,
     total_lm_loss = 0
     count = 0
     sum_accuracy = 0
+    
+    acc_score_list = []
     for i, batch in enumerate(val_data):
       ids, label, mask = batch
 
@@ -481,9 +506,10 @@ def validate(lm: torch.nn.Module,
         count += 1
         
         acc = q3_acc(true_label, preds, res_mask)
+        acc_score_list.append(acc)
         sum_accuracy += acc
     last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
-    return last_accuracy, total_lm_loss/count, total_inf_loss/count
+    return last_accuracy, total_lm_loss/count, total_inf_loss/count, acc_score_list
 
 def test(lm: torch.nn.Module,
          inf_model: torch.nn.Module,
