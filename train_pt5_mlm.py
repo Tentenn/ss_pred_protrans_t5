@@ -234,7 +234,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
-      q3_accuracy, v_loss_lm, v_loss_inf = validate(lm, inf_model, val_data, loss_fn)
+      q3_accuracy, v_loss_lm, v_loss_inf, _ = validate(lm, inf_model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss_lm":v_loss_lm})
       wandb.log({"val_loss_inf":v_loss_inf})
@@ -303,7 +303,7 @@ def train(lm: torch.nn.Module,
     
     for i, batch in enumerate(train_data):
         ## Perform mid-train validation step. Can be skipped to speed up training
-        compare_embeds = True
+        
         if i%valstep==0:
             t1 = datetime.now()
             if valsize==-1:
@@ -319,7 +319,7 @@ def train(lm: torch.nn.Module,
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf, acc_score_list = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
-            plot_accuracy = True
+            plot_accuracy = False
             if plot_accuracy:
                 
                 n_samples = len(acc_score_list)
@@ -332,6 +332,7 @@ def train(lm: torch.nn.Module,
                 print("Saved accuracy plots!")
                 
             # log metric for embeddings similarity
+            compare_embeds = False
             if compare_embeds:
                 print("Start comparing embeddings...")
                 # get seqs for validation set
@@ -364,12 +365,6 @@ def train(lm: torch.nn.Module,
                 eudist_mean = sum(eudist)/len(eudist)
                 wandb.log({"cosim":cosim_mean, "eudist":eudist_mean})
                 print("Successfully logged embedding difference")
-            # log individual protein accuracy
-            log_indi_prot = True
-            if log_indi_prot:
-                ## TODO: save plot as image
-                
-                pass
             
             gc.collect()
             inf_model.train()
@@ -714,6 +709,7 @@ if __name__ == "__main__":
     ## Data loading
     print("load data...")
     train_path = datapath + trainset
+    train_path = "cutout_0_mask_train.jsonl"
     val_path = datapath + valset
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 

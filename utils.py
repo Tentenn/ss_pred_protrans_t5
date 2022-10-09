@@ -41,7 +41,9 @@ def add_noise_embedding(embedding, device, density=0.2, mode="dropout", std=0.1,
   elif mode=="noise":
     return embedding + (std**variance)*torch.randn(embedding.shape, device=device)
   elif mode=="residue":
-    mask = torch.randn(embedding.shape[:2], device=device).ge(density).unsqueeze(-1)
+    mask = torch.rand(embedding.shape[:2], device=device).ge(density).unsqueeze(-1)
     return mask*embedding
+  elif mode=="zero":
+    return torch.zeros(embedding.shape, device=device)
   else:
     assert False, "Not implemented dropout mode '{mode}'. available dropout, noise, residue"
