@@ -124,7 +124,7 @@ def main_training_loop(model: torch.nn.Module,
               "batch_size": args.bs,
               "optimizer": optimizer}
     
-    exp_name = f"{random.randint(300, 999)}_lr={args.lr}_ep={args.epochs}_bs={args.bs}"
+    exp_name = f"{args.wname}_{random.randint(300, 999)}_lr={args.lr}_ep={args.epochs}_bs={args.bs}"
     wandb.init(project=args.pname, entity="kyttang", config=config, name=exp_name)
     # track best scores
     best_accuracy = float('-inf')
@@ -135,9 +135,10 @@ def main_training_loop(model: torch.nn.Module,
       t_loss = train(model, train_data, optimizer)
 
       # validate results and calculate scores
-      q3_accuracy, v_loss = validate(model, val_data)
+      q3_accuracy, v_loss, std = validate(model, val_data)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
+      wandb.log({"val_std":std})
       
       # save model if better
       if q3_accuracy > best_accuracy:
@@ -197,6 +198,7 @@ def validate(model: torch.nn.Module,
     
     last_accuracy = 0
     losses = []
+    acc_scores = []
     for i, batch in enumerate(val_data):
       emb, label, mask = batch
       out = model(emb) # shape: [bs, max_seq_len, 3]
@@ -213,7 +215,7 @@ def validate(model: torch.nn.Module,
       losses.append(loss)
       # wandb.log({"val_loss":loss.item()})
 
-      acc_scores = []
+      
       for batch_idx, out_logits in enumerate(out):
         # Calculate scores for each sequence individually
         # And average over them
@@ -228,9 +230,9 @@ def validate(model: torch.nn.Module,
         
         acc = q3_acc(true_label, preds, res_mask)
         acc_scores.append(acc)
-      last_accuracy = sum(acc_scores)/len(acc_scores)# , np.std(acc_scores)
+    last_accuracy = sum(acc_scores)/len(acc_scores)# , np.std(acc_scores)
 
-    return last_accuracy, sum(losses)/len(losses)
+    return last_accuracy, sum(losses)/len(losses), np.std(acc_scores)
 
 def test(model: torch.nn.Module,
           test_data: DataLoader,
@@ -279,13 +281,14 @@ def q3_acc(y_true, y_pred, mask):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bs", type=int, default=8)
+    parser.add_argument("--bs", type=int, default=40)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--epochs", type=int, default=4)
     # parser.add_argument("--lmt", type=str, default="bert", help="Choose language model type: pt5, pbert")
     parser.add_argument("--temb", type=str, help="path for training embeddings")
     parser.add_argument("--vemb", type=str, help="path for validation embeddings")
     parser.add_argument("--pname", type=str, help="project name for wandb")
+    parser.add_argument("--wname", type=str, help="name of run")
     args = parser.parse_args()
 
     ## Determine device
@@ -303,10 +306,10 @@ if __name__ == "__main__":
     val_labels_path = "data/val.jsonl"
 
     train_loader = get_dataloader(embed_path=args.temb, 
-      labels_path=train_labels_path, batch_size=40, device=device, seed=42)
+      labels_path=train_labels_path, batch_size=args.bs, device=device, seed=42)
 
     val_loader = get_dataloader(embed_path=args.vemb, 
-     labels_path=val_labels_path, batch_size=40, device=device, seed=42)
+     labels_path=val_labels_path, batch_size=args.bs, device=device, seed=42)
 
     ### Test loader
     # test_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/new_pisces.jsonl_embeddings.h5"
