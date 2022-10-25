@@ -38,6 +38,13 @@ def get_T5_model(path):
 
     return model, tokenizer
 
+def get_Bert_model():
+    model = BertModel.from_pretrained("Rostlab/prot_bert")
+    model = model.to(device) # move model to GPU
+    model = model.eval() # set model to evaluation model
+    tokenizer = BertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
+    return model, tokenizer
+
 # Generate embeddings via batch-processing
 # per_residue indicates that embeddings for each residue in a protein should be returned.
 # per_protein indicates that embeddings for a whole protein should be returned (average-pooling)
@@ -152,10 +159,19 @@ if __name__ == "__main__":
     parser.add_argument("--m", type=str, default="Rostlab/prot_t5_xl_half_uniref50-enc", help="path to t5 model folder")
     parser.add_argument("--f", type=str, help="file: fasta,txt,jsonl")
     parser.add_argument("--p", type=str, help="parser mode options: fasta, jsonl, allseqs ")
+    parser.add_argument("--g", type=str, help="model type: bert, t5")
     args = parser.parse_args()
                         
     # Load the encoder part of ProtT5-XL-U50 in half-precision (recommended)
-    model, tokenizer = get_T5_model(args.m) 
+    if args.g == "t5":
+        print("generating embeddings with pt5")
+        model, tokenizer = get_T5_model(args.m)
+    elif args.g == "bert":
+        print("generating embeddings with bert")
+        model, tokenizer = get_Bert_model()
+    else:
+        assert False, f"Error 1, no model type {args.g} found"
+    
     # data_dir_path = "drive/MyDrive/BachelorThesis/data/seth_disorder/"
     # data_dir_path = "./"
     data_paths = [args.f]# ["train.jsonl", "val.jsonl", "new_pisces.jsonl", "casp12.jsonl"]
@@ -175,6 +191,8 @@ if __name__ == "__main__":
       results = get_embeddings(model, tokenizer, seqs)
       # write embeddings
       model_name = args.m.replace("/", "-")
+      if args.g == "bert":
+        model_name = "bert"
       out_path = data_path+f"-{model_name}-"+"_pt5.h5"
       with h5py.File(str(out_path), "w") as hf:
         for sequence_id, embedding in results["residue_embs"].items():

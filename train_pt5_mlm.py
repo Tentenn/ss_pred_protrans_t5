@@ -257,8 +257,8 @@ def main_training_loop(lm: torch.nn.Module, # Language model
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
-        if epochs_without_improvement >= 3:
-            print("max amount of epochs (3) without improvement reached. Stopping training...")
+        if epochs_without_improvement >= 10:
+            print("max amount of epochs (10) without improvement reached. Stopping training...")
             break
         
       
@@ -767,6 +767,9 @@ if __name__ == "__main__":
               }
     experiment_name = f"{wandb_note}_{model_type}-{batch_size}_{epochs}_{max_emb_size}_{lm_lr}_{inf_lr}_{random.randint(300, 999)}"
     wandb.init(project=project_name, entity="kyttang", config=config, name=experiment_name)
+    
+    ## Log arguments
+    print(' '.join(f'{k}={v}' for k, v in vars(args).items()))
 
     ## start training
     print("start training...")
