@@ -29,6 +29,7 @@ from T5Linear import T5Linear
 from smart_optim import Adamax
 from transformers import Adafactor
 from BertLinear import BertLinear
+from BertCNN import BertCNN
 
 
 """
@@ -115,9 +116,10 @@ def main_training_loop(model: torch.nn.Module,
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
-      q3_accuracy, v_loss = validate(model, val_data, loss_fn)
+      q3_accuracy, v_loss, std = validate(model, val_data, loss_fn)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss":v_loss})
+      wandb.log({"val_std":std})
       print("acc:", q3_accuracy)
     
       # update best vloss
@@ -197,6 +199,7 @@ def validate(model: torch.nn.Module,
     total_loss = 0
     count = 0
     sum_accuracy = 0
+    acc_list = []
     for i, batch in enumerate(val_data):
       ids, label, mask = batch
 
@@ -228,9 +231,11 @@ def validate(model: torch.nn.Module,
         
         acc = q3_acc(true_label, preds, res_mask)
         sum_accuracy += acc
-    last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
+        acc_list.append(acc)
+    # last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
     # print("len acc scores: ", count, f"should be ({len(val_data)})")
-    return last_accuracy, total_loss/count
+    last_accuracy = sum(acc_list)/len(acc_list)
+    return last_accuracy, total_loss/count, np.std(acc_list)
 
 def test(model: torch.nn.Module,
           test_data: DataLoader,
@@ -347,26 +352,25 @@ if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print("Using", device)
     
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--bs", type=int, default=8)
-    parser.add_argument("--grac", type=int, default=10)
-    parser.add_argument("--maxemb", type=int, default=400)
+    parser.add_argument("--grac", type=int, default=1)
+    parser.add_argument("--maxemb", type=int, default=128)
     parser.add_argument("--optim", type=str, default="adamax")
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--epochs", type=int, default=4)
-    parser.add_argument("--model_type", type=str, default="pt5-cnn")
+    parser.add_argument("--model_type", type=str, default="bert-cnn")
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--trainset", type=str, default="new_pisces_200.jsonl")
-    parser.add_argument("--valset", type=str, default="casp12_200.jsonl")
+    parser.add_argument("--trainset", type=str, default="train.jsonl")
+    parser.add_argument("--valset", type=str, default="val.jsonl")
     parser.add_argument("--wdnote", type=str)
-    parser.add_argument("--trainable", type=int, default=None)
+    parser.add_argument("--trainable", type=int, default=24)
     parser.add_argument("--pn", type=str, default="runtesting")
     parser.add_argument("--wd", type=float, default=0.01)
     parser.add_argument("--fr", type=int, help="freezes t5 after epoch i", default=10)
     parser.add_argument("--msk", type=float, help="randomly mask the sequence", default=0)
-    parser.add_argument("--datapath", type=str, help="path to datafolder", default="/home/ubuntu/instance1/data/")
+    parser.add_argument("--datapath", type=str, help="path to datafolder", default="/notebooks/ss_pred_protrans_t5/data/")
     args = parser.parse_args()
     
     batch_size = args.bs
@@ -394,8 +398,8 @@ if __name__ == "__main__":
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
       tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
-    elif model_type == "pbert-cnn":
-      model = ProtBertCNN(dropout=dropout).to(device)
+    elif model_type == "bert-cnn":
+      model = BertCNN().to(device)
       tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
     elif model_type == "pt5-lin":
       model = T5Linear(dropout=dropout).to(device)
@@ -421,19 +425,14 @@ if __name__ == "__main__":
                                 device=device, seed=42,
                                 max_emb_size=2000, tokenizer=tokenizer)
 
-    # Test loader
-    casp12_path = datapath + "casp12.jsonl"
-    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000, tokenizer=tokenizer)
-
-    npis_path = datapath + "new_pisces.jsonl"
-    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
-                                 max_emb_size=5000, tokenizer=tokenizer)
+    
 
     # Apply freezing
     if args.trainable <= 0: ## -1 to freeze whole t5 model
         print("freeze all layers")
         freeze_t5_model(model)
+    elif args.trainable == 24:
+        print("No freezing supported for protbert")
     elif args.trainable > 0:
         num_trainable_layers = args.trainable
         trainable_t5_layers_stage1 = [str(integer) for integer in
@@ -473,8 +472,6 @@ if __name__ == "__main__":
               "dropout": dropout,
               "trainset": trainset,
               "valset": valset,
-              "casp12_path": casp12_path,
-              "npis_path": npis_path,
               "train_size": len(train_data),
               "val_size": len(val_data),
               "sequence_mask": seq_mask,
@@ -500,11 +497,21 @@ if __name__ == "__main__":
                         freeze_epoch=freeze_epoch)
     
     ## Test data        
+    # Test loader
+    casp12_path = datapath + "casp12.jsonl"
+    casp12_loader = get_dataloader(jsonl_path=casp12_path, batch_size=1, device=device, seed=seed,
+                                 max_emb_size=5000, tokenizer=tokenizer)
+
+    npis_path = datapath + "new_pisces.jsonl"
+    npis_loader = get_dataloader(jsonl_path=npis_path, batch_size=1, device=device, seed=seed,
+                                 max_emb_size=5000, tokenizer=tokenizer)
+    
+    
     ## Load model
     if model_type == "pt5-cnn":
       model = T5CNN().to(device)
-    elif model_type == "pbert-cnn":
-      model = ProtBertCNN(dropout=dropout).to(device)
+    elif model_type == "bert-cnn":
+      model = BertCNN(dropout=dropout).to(device)
     elif model_type == "pt5-lin":
       model = T5Linear(dropout=dropout).to(device)
     elif model_type == "pbert-lin":

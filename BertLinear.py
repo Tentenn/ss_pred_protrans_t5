@@ -29,6 +29,7 @@ class BertLinear(torch.nn.Module):
         emb = self.bert(input_ids).last_hidden_state
         # trim last
         emb = emb[:, 1:-1, :]
+        
 
         # old architecture
         # print("embsize", emb.size())
