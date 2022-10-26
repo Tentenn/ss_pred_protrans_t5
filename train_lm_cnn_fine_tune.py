@@ -129,7 +129,7 @@ def main_training_loop(model: torch.nn.Module,
       else:
         epochs_without_improvement += 1
         print(f"Epochs without improvement: {epochs_without_improvement}")
-        if epochs_without_improvement >= 2:
+        if epochs_without_improvement >= 10:
             print("max amount of epochs without improvement reached. Stopping training...")
             break
       

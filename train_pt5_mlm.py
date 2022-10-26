@@ -16,7 +16,7 @@ from typing import Any
 import json
 from torch.utils.data import DataLoader, Dataset
 import torch
-from transformers import T5EncoderModel, T5Tokenizer, BertTokenizer, T5ForConditionalGeneration
+from transformers import T5EncoderModel, T5Tokenizer, T5ForConditionalGeneration, BertTokenizer, BertForMaskedLM
 from pathlib import Path
 from pyfaidx import Fasta
 from typing import Dict, Tuple, List
@@ -191,7 +191,8 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                        emb_d: float,
                        emb_d_mode: str,
                        lm_chkpt: str,
-                       inf_chkpt: str):
+                       inf_chkpt: str,
+                       model_type:str):
 
     if optimizer_name == "adam":
       optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -222,19 +223,21 @@ def main_training_loop(lm: torch.nn.Module, # Language model
                                                   optimizer_inf=optimizer_inf, mixed=True,
                                                   valstep=valstep, valsize=valsize,
                                                   val_path=val_path, emb_d=emb_d,
-                                                  emb_d_mode=emb_d_mode, val_data=val_data)
+                                                  emb_d_mode=emb_d_mode, val_data=val_data,
+                                                  model_type=model_type)
       else:
         print("using single optimizer for lm and inf model")
         t_loss_sum, t_loss_lm, t_loss_inf = train(lm, inf_model, 
                                                   train_data, loss_fn, optimizer, grad_accum,
                                                   valstep=valstep, valsize=valsize,
                                                   val_path=val_path, emb_d=emb_d,
-                                                  emb_d_mode=emb_d_mode, val_data=val_data)
+                                                  emb_d_mode=emb_d_mode, val_data=val_data,
+                                                  model_type=model_type)
       print("t_loss_sum:",t_loss_sum,"t_loss_lm:",t_loss_lm,"t_loss_inf:",t_loss_inf)
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
-      q3_accuracy, v_loss_lm, v_loss_inf, _ = validate(lm, inf_model, val_data, loss_fn)
+      q3_accuracy, v_loss_lm, v_loss_inf, _ = validate(lm, inf_model, val_data, loss_fn, model_type=model_type)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss_lm":v_loss_lm})
       wandb.log({"val_loss_inf":v_loss_inf})
@@ -283,7 +286,8 @@ def train(lm: torch.nn.Module,
           val_path=None, 
           emb_d=0.2, 
           emb_d_mode="default",
-          val_data=None):
+          val_data=None,
+          model_type=None):
     """
     do a train on a minibatch
     mixed: whether or not 2 optimizers are used
@@ -319,6 +323,8 @@ def train(lm: torch.nn.Module,
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
             mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf, acc_score_list = validate(lm, inf_model, mid_val_loader, loss_fn)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
+            
+            # Accuracy plots (Not used)
             plot_accuracy = False
             if plot_accuracy:
                 
@@ -331,7 +337,7 @@ def train(lm: torch.nn.Module,
                 plt.clf()
                 print("Saved accuracy plots!")
                 
-            # log metric for embeddings similarity
+            # log metric for embeddings similarity (Not used)
             compare_embeds = False
             if compare_embeds:
                 print("Start comparing embeddings...")
@@ -396,11 +402,21 @@ def train(lm: torch.nn.Module,
         # LM LOSS: forward pass of whole language model
         assert len(ids.shape) == 2, "Shape not right"
         assert masked_input.shape == ids.shape, f"Shapes not match {masked_input.shape}, {ids.shape} \n {masked_input} \n {ids}"
-        lm_output = lm(input_ids=masked_input, labels=ids)
-        lm_loss = lm_output.loss
+        
+        if model_type=="pt5-cnn":
+            lm_output = lm(input_ids=masked_input, labels=ids)
+            lm_loss = lm_output.loss
+            # get embeddings from lm output and pass through inference model
+            embeddings = lm_output.encoder_last_hidden_state
+        elif model_type=="pbert-cnn":
+            lm_output = lm(input_ids=masked_input, labels=ids, output_hidden_states=True)
+            lm_loss = lm_output.loss
+            # get embeddings from lm output and pass through inference model
+            embeddings = lm_output.hidden_states[0]
+        else:
+            assert False, f"Model type {model_type} not implemented. (Error in train loop)"
 
-        # get embeddings from lm output and pass through inference model
-        embeddings = lm_output.encoder_last_hidden_state
+        
         # postprocessing embeddings
         embeddings = remove_eos_embedding(embeddings)
         embeddings = utils.add_noise_embedding(embeddings, device=device, density=emb_d, mode=emb_d_mode)
@@ -444,7 +460,8 @@ def train(lm: torch.nn.Module,
 def validate(lm: torch.nn.Module,
           inf_model: torch.nn.Module,
           val_data: DataLoader,
-          loss_fn):
+          loss_fn,
+          model_type):
     lm.eval()
     inf_model.eval()
     
@@ -470,16 +487,27 @@ def validate(lm: torch.nn.Module,
       
       # forward pass of whole language model
       assert len(ids.shape) == 2, "Shape not right"
-      with torch.no_grad():
-        lm_output = lm(input_ids=ids, labels=ids)
-      lm_loss = lm_output.loss
-      total_lm_loss += lm_loss.item() # loss not needed here
       
       # get embeddings from lm output and pass through inference model
-      embeddings = lm_output.encoder_last_hidden_state
+      if model_type=="pt5-cnn":
+        with torch.no_grad():
+          lm_output = lm(input_ids=ids, labels=ids)
+        lm_loss = lm_output.loss
+        embeddings = lm_output.encoder_last_hidden_state
+      elif model_type=="pbert-cnn":
+        with torch.no_grad():
+          lm_output = lm(input_ids=ids, labels=ids, output_hidden_states=True)
+        lm_loss = lm_output.loss
+        embeddings = lm_output.hidden_states[0]
+      else:
+        assert False, f"Model type {model_type} not implemented. (Error in validate loop)"
+      
+      # preprocess and put through inference model for prediction
       embeddings = remove_eos_embedding(embeddings)
       with torch.no_grad():
         inf_out = inf_model(embeddings) # shape: [bs, max_seq_len, 3]
+      
+      total_lm_loss += lm_loss.item() # loss not needed here
     
       # reshape to make loss work 
       inf_out_for_loss = torch.transpose(inf_out, 1, 2)
@@ -703,6 +731,12 @@ if __name__ == "__main__":
         model_pt5 = T5ForConditionalGeneration.from_pretrained(args.from_chkpt_lm).to(device)
       else:
         model_pt5 = T5ForConditionalGeneration.from_pretrained("Rostlab/prot_t5_xl_uniref50").to(device)
+      model_lm = model_pt5
+    elif model_type == "pbert-cnn":
+      tokenizer = BertTokenizer.from_pretrained("Rostlab/prot_bert")
+      model_cnn = ConvNet()
+      model_pbert = BertForMaskedLM.from_pretrained("Rostlab/prot_bert").to(device)
+      model_lm = model_pbert
     else:
       assert False, f"Model type not implemented {model_type}"
     
@@ -710,6 +744,7 @@ if __name__ == "__main__":
     print("load data...")
     train_path = datapath + trainset
     train_path = "cutout_0_mask_train.jsonl"
+    print("[DEV] Using", train_path)
     val_path = datapath + valset
     train_loader = get_dataloader(jsonl_path=train_path, 
                                   batch_size=batch_size, 
@@ -721,29 +756,32 @@ if __name__ == "__main__":
                                 device=device, seed=42,
                                 max_emb_size=2000, tokenizer=tokenizer)
 
-    ## Apply freezing
-    if args.trainable <= 0: ## -1 to freeze whole t5 model
-        print("freeze all layers")
-        freeze_t5_model(model)
-    elif args.trainable > 0 and args.trainable < 24:
-        num_trainable_layers = args.trainable
-        trainable_t5_layers_stage1 = [str(integer) for integer in
-                                      list(range(23, 23 - num_trainable_layers, -1))]
-        print("Entering model freezing")
-        for layer, param in model_pt5.named_parameters():
-            param.requires_grad = False
-        print("all layers frozen. Unfreezing trainable layers")
-        unfr_c = 0
+    ## Apply freezing (Only implemented for Prot-T5)
+    if model_type == "pt5-cnn":
+        if args.trainable <= 0: ## -1 to freeze whole t5 model
+            print("freeze all layers")
+            freeze_t5_model(model)
+        elif args.trainable > 0 and args.trainable < 24:
+            num_trainable_layers = args.trainable
+            trainable_t5_layers_stage1 = [str(integer) for integer in
+                                          list(range(23, 23 - num_trainable_layers, -1))]
+            print("Entering model freezing")
+            for layer, param in model_pt5.named_parameters():
+                param.requires_grad = False
+            print("all layers frozen. Unfreezing trainable layers")
+            unfr_c = 0
 
-        # unfreeze desired layers
-        for layer, param in model_pt5.named_parameters():
-            lea = [trainable in layer for trainable in trainable_t5_layers_stage1]
-            if sum(lea) >= 1:
-                param.requires_grad = True
-                unfr_c += 1
-                # print(f"unfroze {layer}")
+            # unfreeze desired layers
+            for layer, param in model_pt5.named_parameters():
+                lea = [trainable in layer for trainable in trainable_t5_layers_stage1]
+                if sum(lea) >= 1:
+                    param.requires_grad = True
+                    unfr_c += 1
+                    # print(f"unfroze {layer}")
+        else:
+            print("No freezing")
     else:
-        print("No freezing")
+        print(f"[DEV] No freezing implemented for {model_type}")
 
     ## wandb logging
     config = {"lr": str(lr).replace("0.", ""),
@@ -773,7 +811,7 @@ if __name__ == "__main__":
 
     ## start training
     print("start training...")
-    main_training_loop(lm=model_pt5,
+    main_training_loop(lm=model_lm,
                         inf_model=model_cnn, 
                         train_data=train_loader, 
                         val_data=val_loader, 
@@ -794,9 +832,10 @@ if __name__ == "__main__":
                         emb_d=emb_d,
                         emb_d_mode=emb_d_mode,
                         lm_chkpt=lm_chkpt,
-                        inf_chkpt=inf_chkpt)
+                        inf_chkpt=inf_chkpt,
+                        model_type=model_type)
     
-    ## Test data        
+    ## Test data       (NOT WORKING FOR PBERT TODO) 
     if run_test:
         print("start testing...")
         # Test loader
