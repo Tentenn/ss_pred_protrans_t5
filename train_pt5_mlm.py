@@ -738,7 +738,7 @@ if __name__ == "__main__":
       model_pbert = BertForMaskedLM.from_pretrained("Rostlab/prot_bert").to(device)
       model_lm = model_pbert
     else:
-      assert False, f"Model type not implemented {model_type}"
+      assert False, f"Model type not implemented {model_type} Error in main"
     
     ## Data loading
     print("load data...")
@@ -778,10 +778,10 @@ if __name__ == "__main__":
                     param.requires_grad = True
                     unfr_c += 1
                     # print(f"unfroze {layer}")
-        else:
-            print("No freezing")
+    elif model_type=="pbert-cnn":
+        print(f"No freezing because not implemented for model_type {model_type}")
     else:
-        print(f"[DEV] No freezing implemented for {model_type}")
+        print(f"[DEV] No freezing implemented for {model_type} error in freezing")
 
     ## wandb logging
     config = {"lr": str(lr).replace("0.", ""),
