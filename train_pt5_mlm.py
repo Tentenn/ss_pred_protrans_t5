@@ -66,17 +66,23 @@ def process_labels(labels: list, mask:list, onehot=False):
   processed = [list(pad(subl, max_len, -1)) for subl in processed]
   return torch.tensor(np.array(processed), dtype=torch.long)
 
-def _filter_ids(ids_tensor):
-    
-    for ids in ids_tensor:
-        i = 0
-        for ind,e in enumerate(ids):
-          # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
-          if e == 0:
-            if i < len(tokenizer.additional_special_tokens_ids):
-                i = 0
-            ids[ind] = tokenizer.additional_special_tokens_ids[i] ## TODO: Add more special tokens
-            i += 1
+def _filter_ids(ids_tensor, model_type):
+    if model_type=="pt5-cnn":
+        for ids in ids_tensor:
+            i = 0
+            for ind,e in enumerate(ids):
+              # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
+              if e == 0:
+                if i < len(tokenizer.additional_special_tokens_ids):
+                    i = 0
+                ids[ind] = tokenizer.additional_special_tokens_ids[i] ## TODO: Add more special tokens
+                i += 1
+    elif model_type == "pbert-cnn":
+        for ids in ids_tensor:
+            for ind,e in enumerate(ids):
+              # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
+              if e == 0:
+                ids[ind] = tokenizer.tokenizer.mask_token_id ## TODO: Add more special tokens
     return ids_tensor
 
 def apply_mask(input_ids, noise_mask, device):
