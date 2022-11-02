@@ -21,7 +21,7 @@ class EmbedDataset(Dataset):
         self.data_dict = utils.load_data(labels_path)
         self.headers = tuple(self.embeddings.keys())
         # Header refers to uniprot id
-        assert len(self.headers) == len(self.data_dict.keys()), "dict len not the same"
+        assert len(self.headers) == len(self.data_dict.keys()), f"dict len not the same:\n {len(self.headers)} \n {len(self.data_dict.keys())}"
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, str]:
         # given an index, return embedding, label, mask

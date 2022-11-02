@@ -82,15 +82,15 @@ def _filter_ids(ids_tensor, model_type):
             for ind,e in enumerate(ids):
               # assert ind < len(ids), f"index out of range for {ind, len(ids)}"
               if e == 0:
-                ids[ind] = tokenizer.tokenizer.mask_token_id ## TODO: Add more special tokens
+                ids[ind] = tokenizer.mask_token_id ## TODO: Add more special tokens
     return ids_tensor
 
-def apply_mask(input_ids, noise_mask, device):
+def apply_mask(input_ids, noise_mask, device, model_type):
   # Applies noise mask to ids
   # result ["M", "extra_id_0", "C", "C"] <= as ids
   assert len(np.copy(input_ids.cpu())) == len(input_ids), "copy length not the same"
   assert input_ids.shape == noise_mask.shape, f"input_ids: {input_ids} \n noise_mask: {noise_mask}"
-  masked_input_ids = _filter_ids(copy.deepcopy(input_ids).to(device)*~noise_mask)
+  masked_input_ids = _filter_ids(copy.deepcopy(input_ids).to(device)*~noise_mask, model_type=model_type)
   return masked_input_ids, "not implemented"# masked_labels_ids
 
 def logits_to_preds(logits):
@@ -243,10 +243,11 @@ def main_training_loop(lm: torch.nn.Module, # Language model
 
       # validate results and calculate scores
       print(f"validate epoch {epoch}")
-      q3_accuracy, v_loss_lm, v_loss_inf, _ = validate(lm, inf_model, val_data, loss_fn, model_type=model_type)
+      q3_accuracy, v_loss_lm, v_loss_inf, acc_score_list = validate(lm, inf_model, val_data, loss_fn, model_type=model_type)
       wandb.log({"accuracy (Q3)":q3_accuracy})
       wandb.log({"val_loss_lm":v_loss_lm})
       wandb.log({"val_loss_inf":v_loss_inf})
+      wandb.log({"val_std":np.std(acc_score_list)})
       now = datetime.now()
       print("acc:", q3_accuracy, "val_loss_lm:", v_loss_lm, "val_loss_inf:", v_loss_inf, "compute_time:", now-t1_time)
     
@@ -257,7 +258,7 @@ def main_training_loop(lm: torch.nn.Module, # Language model
         best_vloss = v_loss_inf
         epochs_without_improvement = 0
         best_accuracy = q3_accuracy
-        if best_accuracy > 0.85:
+        if best_accuracy > 0.88:
             lm.save_pretrained(lm_chkpt)
             torch.save(inf_model.state_dict(), inf_chkpt)
             print(f"models successfully saved as {lm_chkpt} and {inf_chkpt} at epoch {epoch}")
@@ -327,8 +328,9 @@ def train(lm: torch.nn.Module,
                                 max_samples=valsize)
             else:
                 assert False, f"val_size must be between 0 and 1 or -1 was given {valsize}"
-            mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf, acc_score_list = validate(lm, inf_model, mid_val_loader, loss_fn)
+            mid_q3_accuracy, mid_v_loss_lm, mid_v_loss_inf, acc_score_list = validate(lm, inf_model, mid_val_loader, loss_fn, model_type=model_type)
             wandb.log({"mid_q3_accuracy":mid_q3_accuracy, "mid_v_loss_inf":mid_v_loss_inf})
+            wandb.log({"mid_val_std":np.std(acc_score_list)})
             
             # Accuracy plots (Not used)
             plot_accuracy = False
@@ -402,7 +404,7 @@ def train(lm: torch.nn.Module,
         # generate span masks and apply to ids
         noise_mask = torch.tensor(np.array([random_spans_noise_mask(len(single_ids), 0.15, 1) for single_ids in ids])).to(device)
         assert ids.shape == noise_mask.shape, "shape not the same length"
-        masked_input, masked_labels = apply_mask(ids, noise_mask, device)
+        masked_input, masked_labels = apply_mask(ids, noise_mask, device, model_type=model_type)
         masked_input = masked_input.to(device)
         
         # LM LOSS: forward pass of whole language model
@@ -418,7 +420,7 @@ def train(lm: torch.nn.Module,
             lm_output = lm(input_ids=masked_input, labels=ids, output_hidden_states=True)
             lm_loss = lm_output.loss
             # get embeddings from lm output and pass through inference model
-            embeddings = lm_output.hidden_states[0]
+            embeddings = lm_output.hidden_states[0][:,:-1,:] ## cut to match size of label
         else:
             assert False, f"Model type {model_type} not implemented. (Error in train loop)"
 
@@ -537,7 +539,7 @@ def validate(lm: torch.nn.Module,
         acc = q3_acc(true_label, preds, res_mask)
         acc_score_list.append(acc)
         sum_accuracy += acc
-    last_accuracy = sum_accuracy/len(val_data)# , np.std(acc_scores)
+    last_accuracy = sum_accuracy/len(val_data)
     return last_accuracy, total_lm_loss/count, total_inf_loss/count, acc_score_list
 
 def test(lm: torch.nn.Module,
@@ -730,7 +732,7 @@ if __name__ == "__main__":
       if args.from_chkpt_inf is not None:
         print(f"Starting training of inference model from a checkpoint {args.from_chkpt_inf}")
         model_cnn.load_state_dict(torch.load(args.from_chkpt_inf))
-      model_cnn = model_cnn.to(device)
+      
         
       if args.from_chkpt_lm is not None:
         print(f"Starting training of language model from a checkpoint {args.from_chkpt_lm}")
@@ -745,11 +747,11 @@ if __name__ == "__main__":
       model_lm = model_pbert
     else:
       assert False, f"Model type not implemented {model_type} Error in main"
-    
+    model_cnn = model_cnn.to(device)
     ## Data loading
     print("load data...")
     train_path = datapath + trainset
-    train_path = "cutout_0_mask_train.jsonl"
+    # train_path = "(data/cutout_0_mask_train.jsonl"
     print("[DEV] Using", train_path)
     val_path = datapath + valset
     train_loader = get_dataloader(jsonl_path=train_path, 

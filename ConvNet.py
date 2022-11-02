@@ -21,7 +21,7 @@ class ConvNet(torch.nn.Module):
         )
 
     def forward(self, x):
-        print(x.shape)
+        # print(x.shape)
         # IN: X = (B x L x F); OUT: (B x F x L, 1)
         x = x.permute(0, 2, 1).unsqueeze(dim=-1)
         x = self.elmo_feature_extractor(x)  # OUT: (B x 32 x L x 1)

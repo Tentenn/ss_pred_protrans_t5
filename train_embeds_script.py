@@ -164,13 +164,14 @@ def train(model: torch.nn.Module,
     for i, batch in enumerate(train_data):
         emb, label, mask = batch
         optimizer.zero_grad()
+        emb = emb.to(device)
         out = model(emb) # shape: [bs, max_seq_len, 3]
 
         # string to float conversion, padding and mask labels
-        labels = process_label(label, mask=mask, onehot=False)
+        labels = process_label(label, mask=mask, onehot=False).to(device)
 
         # reshape to make loss work 
-        out = torch.transpose(out, 1, 2)
+        out = torch.transpose(out, 1, 2).to(device)
 
         # # mask out disordered aas
         # out = out * mask.unsqueeze(-1)
@@ -201,14 +202,15 @@ def validate(model: torch.nn.Module,
     acc_scores = []
     for i, batch in enumerate(val_data):
       emb, label, mask = batch
-      out = model(emb) # shape: [bs, max_seq_len, 3]
+      emb = emb.to(device)
+      out = model(emb).to(device) # shape: [bs, max_seq_len, 3]
       # string to float conversion
-      labels_f = process_label(label, mask=mask, onehot=False)
+      labels_f = process_label(label, mask=mask, onehot=False).to(device)
 
       # reshape to make loss work 
       max_batch_len = len(labels_f[0])
       bs = len(label)
-      out_f = torch.transpose(out, 1, 2)
+      out_f = torch.transpose(out, 1, 2).to(device)
 
       # calculate loss, ignores -1 elements (padding and masking)
       loss = loss_fn(out_f, labels_f)
@@ -289,6 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--vemb", type=str, help="path for validation embeddings")
     parser.add_argument("--pname", type=str, help="project name for wandb")
     parser.add_argument("--wname", type=str, help="name of run")
+    parser.add_argument("--train_labels", type=str, help="jsonl file", default="data/train.jsonl")
     args = parser.parse_args()
 
     ## Determine device
@@ -302,7 +305,7 @@ if __name__ == "__main__":
     # val_embeds_path = "/content/drive/MyDrive/BachelorThesis/data/val.jsonl_embeddings.h5"
     # val_embeds_path = "/notebooks/ss_pred_protrans_t5/data/val.jsonl-Rostlab-prot_t5_xl_half_uniref50-enc-_pt5.h5"
 
-    train_labels_path = "data/train.jsonl"
+    train_labels_path = args.train_labels
     val_labels_path = "data/val.jsonl"
 
     train_loader = get_dataloader(embed_path=args.temb, 
@@ -321,6 +324,7 @@ if __name__ == "__main__":
     ## Load model
     print("load Model")
     cnn = ConvNet()
+    cnn = cnn.to(device)
 
     ## Train and validate (train and validate)
     print("start Training")

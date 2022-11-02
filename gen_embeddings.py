@@ -64,7 +64,7 @@ def get_embeddings(model, tokenizer, seqs, max_residues=4000,
     start = time.time()
     batch = list()
     for seq_idx, (pdb_id, seq) in enumerate(seq_dict,1):
-        # print(seq_idx, "/", len(seq_dict), end= "\r")
+        print(seq_idx, "/", len(seq_dict), end= "\r")
         seq = seq
         seq_len = len(seq)
         seq = ' '.join(list(seq))
